@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import { escapeXml } from '../ui/helpers.js';
 
 /**
- * converts the content of a contenteditable surface into a .docx Uint8Array.
+ * Converts the content of a contenteditable surface into a .docx Uint8Array.
  */
 export async function buildDocx(surface) {
   const bodyXml = nodesToDocxXml(surface.childNodes);
@@ -43,6 +43,16 @@ export async function buildDocx(surface) {
   <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="200" w:after="100"/></w:pPr><w:rPr><w:b/><w:sz w:val="27"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="160" w:after="80"/></w:pPr><w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>
   <w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:basedOn w:val="Normal"/></w:style>
+  <w:style w:type="table" w:styleId="TableNormal"><w:name w:val="Normal Table"/>
+    <w:tblPr><w:tblBorders>
+      <w:top w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:left w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:bottom w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:right w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:insideH w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:insideV w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+    </w:tblBorders></w:tblPr>
+  </w:style>
 </w:styles>`;
 
   const core = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -69,7 +79,7 @@ export async function buildDocx(surface) {
   return zip.generateAsync({ type: 'uint8array' });
 }
 
-// xml serializations
+// xmll serialization
 function nodesToDocxXml(nodes) {
   let xml = '';
   let sawBlock = false;
@@ -106,12 +116,98 @@ function blockNodeToXml(node) {
     });
     return out;
   }
+  if (tag === 'table') return tableToXml(node);
   if (tag === 'br') return null;
   if (['blockquote', 'section', 'article'].includes(tag)) return nodesToDocxXml(node.childNodes);
   if (node.textContent.trim()) return paragraphXml(runsFromInline(node, {}));
   return null;
 }
 
+// table
+function tableToXml(tableNode) {
+  // collect all rows from thead / tbody / tfoot / direct tr
+  const rows = Array.from(tableNode.querySelectorAll('tr'));
+  if (!rows.length) return '';
+
+  // calculate max columns for uniform column widths
+  let maxCols = 0;
+  rows.forEach(row => {
+    let cols = 0;
+    row.querySelectorAll('td, th').forEach(cell => {
+      cols += parseInt(cell.getAttribute('colspan') || '1', 10);
+    });
+    if (cols > maxCols) maxCols = cols;
+  });
+
+  // total usable width in twips (page width minus margins): 11906 - 2*1417 = 9072
+  const totalWidth = 9072;
+  const colWidth = maxCols > 0 ? Math.floor(totalWidth / maxCols) : totalWidth;
+
+  const tblBorders = `<w:tblBorders>
+      <w:top    w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:left   w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:bottom w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:right  w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:insideH w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+      <w:insideV w:val="single" w:sz="4" w:space="0" w:color="AAAAAA"/>
+    </w:tblBorders>`;
+
+  let xml = `<w:tbl><w:tblPr><w:tblW w:w="${totalWidth}" w:type="dxa"/>${tblBorders}</w:tblPr>`;
+
+  // column width grid
+  let gridXml = '<w:tblGrid>';
+  for (let i = 0; i < maxCols; i++) {
+    gridXml += `<w:gridCol w:w="${colWidth}"/>`;
+  }
+  gridXml += '</w:tblGrid>';
+  xml += gridXml;
+
+  rows.forEach(row => {
+    // check if this is a header row (inside thead or all cells are th)
+    const isHeader = row.closest('thead') !== null ||
+      Array.from(row.children).every(c => c.tagName.toLowerCase() === 'th');
+
+    xml += '<w:tr>';
+    if (isHeader) xml += '<w:trPr><w:tblHeader/></w:trPr>';
+
+    const cells = Array.from(row.querySelectorAll('td, th'));
+    cells.forEach(cell => {
+      const colspan = parseInt(cell.getAttribute('colspan') || '1', 10);
+      const cellW = colWidth * colspan;
+
+      let cellPr = `<w:tcPr><w:tcW w:w="${cellW}" w:type="dxa"/>`;
+      if (colspan > 1) cellPr += `<w:gridSpan w:val="${colspan}"/>`;
+      if (isHeader) cellPr += `<w:shd w:val="clear" w:color="auto" w:fill="F2F2F2"/>`;
+      cellPr += '</w:tcPr>';
+
+      // cell content: may contain block elements or just inline text
+      let cellContent = '';
+      const children = Array.from(cell.childNodes);
+      const hasBlock = children.some(n =>
+        n.nodeType === Node.ELEMENT_NODE &&
+        ['p', 'div', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'table'].includes(n.tagName.toLowerCase())
+      );
+
+      if (hasBlock) {
+        cellContent = nodesToDocxXml(cell.childNodes);
+      } else {
+        const runs = runsFromInline(cell, isHeader ? { bold: true } : {});
+        cellContent = paragraphXml(runs) || '<w:p/>';
+      }
+
+      xml += `<w:tc>${cellPr}${cellContent}</w:tc>`;
+    });
+
+    xml += '</w:tr>';
+  });
+
+  xml += '</w:tbl>';
+  // word requires a paragraph after a table
+  xml += '<w:p/>';
+  return xml;
+}
+
+// inline runs
 function runsFromInline(node, fmt) {
   let runs = [];
   node.childNodes.forEach(child => {
