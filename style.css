@@ -248,6 +248,8 @@ button.icon.active { background: var(--accent-bg); border-color: var(--accent); 
 }
 .banner.error { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger-border); }
 .banner.ok    { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent-border); }
+.banner.warn  { background: #fff8e1; color: #7a5c00; border: 1px solid #e8d000; }
+[data-theme="dark"] .banner.warn { background: #2e2600; color: #c8a84b; border: 1px solid #5c4e00; }
 
 .spinner {
   display: inline-block;
@@ -278,20 +280,27 @@ button.icon.active { background: var(--accent-bg); border-color: var(--accent); 
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   background: var(--editor-bg);
   min-height: 420px;
-  padding: 36px 44px;
   font-size: 15.5px;
   line-height: 1.75;
   font-family: 'Instrument Serif', Georgia, serif;
+  cursor: text;
 }
-.editor-surface:focus { outline: none; }
-.editor-surface h1 { font-size: 26px; margin: .6em 0 .3em; font-weight: 400; }
-.editor-surface h2 { font-size: 20px; margin: .6em 0 .3em; font-weight: 400; }
-.editor-surface h3 { font-size: 17px; margin: .6em 0 .3em; font-weight: 600; }
-.editor-surface p  { margin: 0 0 .85em; }
-.editor-surface ul, .editor-surface ol { margin: 0 0 .85em; padding-left: 1.5em; }
-.editor-surface table { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 14px; }
-.editor-surface td, .editor-surface th { border: 1px solid var(--rule); padding: 7px 10px; vertical-align: top; }
-.editor-surface th { background: var(--surface2); font-weight: 600; }
+.editor-surface .ProseMirror {
+  min-height: 420px;
+  padding: 36px 44px;
+  outline: none;
+}
+.editor-surface .ProseMirror h1 { font-size: 26px; margin: .6em 0 .3em; font-weight: 400; }
+.editor-surface .ProseMirror h2 { font-size: 20px; margin: .6em 0 .3em; font-weight: 400; }
+.editor-surface .ProseMirror h3 { font-size: 17px; margin: .6em 0 .3em; font-weight: 600; }
+.editor-surface .ProseMirror p  { margin: 0 0 .85em; }
+.editor-surface .ProseMirror ul,
+.editor-surface .ProseMirror ol { margin: 0 0 .85em; padding-left: 1.5em; }
+.editor-surface .ProseMirror table { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 14px; }
+.editor-surface .ProseMirror td,
+.editor-surface .ProseMirror th { border: 1px solid var(--rule); padding: 7px 10px; vertical-align: top; min-width: 60px; }
+.editor-surface .ProseMirror th { background: var(--surface2); font-weight: 600; }
+.editor-surface .ProseMirror .selectedCell { background: var(--accent-bg); }
 
 .editor-header {
   display: flex;
