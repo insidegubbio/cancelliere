@@ -289,6 +289,9 @@ button.icon.active { background: var(--accent-bg); border-color: var(--accent); 
 .editor-surface h3 { font-size: 17px; margin: .6em 0 .3em; font-weight: 600; }
 .editor-surface p  { margin: 0 0 .85em; }
 .editor-surface ul, .editor-surface ol { margin: 0 0 .85em; padding-left: 1.5em; }
+.editor-surface table { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 14px; }
+.editor-surface td, .editor-surface th { border: 1px solid var(--rule); padding: 7px 10px; vertical-align: top; }
+.editor-surface th { background: var(--surface2); font-weight: 600; }
 
 .editor-header {
   display: flex;
