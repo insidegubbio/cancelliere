@@ -3,7 +3,7 @@ import { loadConfig } from './api/storage.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList } from './screens/list.js';
-import { fetchFile, putFile, bytesToBase64 } from './api/github.js';
+import { fetchFile, putFile, renameFileAtomic, bytesToBase64 } from './api/github.js';
 import { buildDocx } from './docx/builder.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
 import mammoth from 'mammoth';
@@ -210,7 +210,7 @@ function renderEditor() {
   });
 
   document.getElementById('btn-save').addEventListener('click', () => {
-    // pass the editor HTML to saveFile instead of a DOM surface
+    // pass the editor html to savefile instead of a dom surface
     saveFile(editor.getHTML());
   });
 }
@@ -256,14 +256,15 @@ async function saveFile(htmlContent) {
     const renaming = newPath !== state.current.file.path;
 
     if (renaming) {
-      const createRes = await putFile(state.config, newPath, base64, message, null);
-      const newSha = createRes?.content?.sha ?? null;
       if (state.current.sha) {
-        const { deleteFile } = await import('./api/github.js');
-        await deleteFile(state.config, state.current.file.path, state.current.sha,
-          `chore: remove ${state.current.file.name} (renamed to ${finalName})`);
+        // existing file, so rename + save content in one commit.
+        const commitMsg = commitMsgInput || `chore: rinomina "${state.current.file.name}" in "${finalName}"`;
+        const { sha: newSha } = await renameFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
+        state.current.sha = newSha;
+      } else {
+        const createRes = await putFile(state.config, newPath, base64, message, null);
+        state.current.sha = createRes?.content?.sha ?? null;
       }
-      state.current.sha = newSha;
       state.current.file = { name: finalName, path: newPath };
     } else {
       const res = await putFile(state.config, newPath, base64, message, state.current.sha);
