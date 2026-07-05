@@ -3,7 +3,7 @@ import { loadConfig } from './api/storage.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList } from './screens/list.js';
-import { fetchFile, putFile, renameFileAtomic, bytesToBase64 } from './api/github.js';
+import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64 } from './api/github.js';
 import { buildDocx } from './docx/builder.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
 import mammoth from 'mammoth';
@@ -257,11 +257,12 @@ async function saveFile(htmlContent) {
 
     if (renaming) {
       if (state.current.sha) {
-        // existing file, so rename + save content in one commit.
+        // existing file so rename + save content in one commit.
         const commitMsg = commitMsgInput || `chore: rinomina "${state.current.file.name}" in "${finalName}"`;
-        const { sha: newSha } = await renameFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
+        const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
         state.current.sha = newSha;
       } else {
+        // brand new, unsaved file so just create it.
         const createRes = await putFile(state.config, newPath, base64, message, null);
         state.current.sha = createRes?.content?.sha ?? null;
       }
