@@ -32,10 +32,6 @@ async function safeJson(res) {
 /**
  * All write operations (create/update/delete/rename) are funneled through this
  * queue so that at most one mutating request is in flight at any time.
- * Firing several writes back-to-back (e.g. renaming two files quickly) used to
- * race against each other and against `refreshList`, occasionally producing
- * "sha wasn't supplied" errors or a file list that didn't refresh correctly.
- * Serializing them removes the race entirely.
  */
 let writeQueue = Promise.resolve();
 function enqueueWrite(task) {
@@ -102,7 +98,7 @@ export function putFile(cfg, path, base64Content, commitMessage, sha) {
 }
 
 /**
- * delete a file on github.
+ * Delete a file on GitHub.
  */
 export function deleteFile(cfg, path, sha, commitMessage) {
   return enqueueWrite(async () => {
@@ -119,24 +115,17 @@ export function deleteFile(cfg, path, sha, commitMessage) {
 }
 
 // --- Git Data API helpers, used to build a single-commit rename ---
-async function getBranchRef(cfg) {
-  const res = await fetch(`${apiBase(cfg)}/git/ref/${encodeURIComponent('heads/' + cfg.branch)}`, {
+
+async function getHeadAndTree(cfg) {
+  const res = await fetch(`${apiBase(cfg)}/commits/${encodeURIComponent(cfg.branch)}`, {
     headers: ghHeaders(cfg.token),
   });
   if (!res.ok) {
     const body = await safeJson(res);
     throw new Error(errorMessage(res.status, body));
   }
-  return res.json();
-}
-
-async function getCommit(cfg, sha) {
-  const res = await fetch(`${apiBase(cfg)}/git/commits/${sha}`, { headers: ghHeaders(cfg.token) });
-  if (!res.ok) {
-    const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
-  }
-  return res.json();
+  const data = await res.json();
+  return { headSha: data.sha, treeSha: data.commit.tree.sha };
 }
 
 async function createBlob(cfg, base64Content) {
@@ -191,33 +180,47 @@ async function updateRef(cfg, commitSha) {
   return res.json();
 }
 
-/**
- * Rename a file in a single Git commit
- */
-export function renameFileAtomic(cfg, oldPath, newPath, base64Content, commitMessage) {
-  return enqueueWrite(async () => {
-    // small retry loop
-    let lastErr;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const ref = await getBranchRef(cfg);
-        const headSha = ref.object.sha;
-        const headCommit = await getCommit(cfg, headSha);
-        const blob = await createBlob(cfg, base64Content);
-
-        const tree = await createTree(cfg, headCommit.tree.sha, [
-          { path: newPath, mode: '100644', type: 'blob', sha: blob.sha },
-          { path: oldPath, mode: '100644', type: 'blob', sha: null },
-        ]);
-
-        const commit = await createCommit(cfg, commitMessage, tree.sha, headSha);
-        await updateRef(cfg, commit.sha);
-        return { commit, sha: blob.sha };
-      } catch (e) {
-        lastErr = e;
-      }
+// shared commit logic with a small retry
+async function commitTreeEntries(cfg, entries, commitMessage) {
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const { headSha, treeSha } = await getHeadAndTree(cfg);
+      const tree = await createTree(cfg, treeSha, entries);
+      const commit = await createCommit(cfg, commitMessage, tree.sha, headSha);
+      await updateRef(cfg, commit.sha);
+      return commit;
+    } catch (e) {
+      lastErr = e;
     }
-    throw lastErr;
+  }
+  throw lastErr;
+}
+
+/**
+ * Rename a file in a single commit, without downloading or re-uploading its content
+ */
+export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) {
+  return enqueueWrite(async () => {
+    const commit = await commitTreeEntries(cfg, [
+      { path: newPath, mode: '100644', type: 'blob', sha: blobSha },
+      { path: oldPath, mode: '100644', type: 'blob', sha: null },
+    ], commitMessage);
+    return { commit, sha: blobSha };
+  });
+}
+
+/**
+ * rename + update a file's content in a single commit
+ */
+export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, commitMessage) {
+  return enqueueWrite(async () => {
+    const blob = await createBlob(cfg, base64Content);
+    const commit = await commitTreeEntries(cfg, [
+      { path: newPath, mode: '100644', type: 'blob', sha: blob.sha },
+      { path: oldPath, mode: '100644', type: 'blob', sha: null },
+    ], commitMessage);
+    return { commit, sha: blob.sha };
   });
 }
 
