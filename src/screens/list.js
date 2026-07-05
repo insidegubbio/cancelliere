@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, fetchFile, putFile, deleteFile, bytesToBase64 } from '../api/github.js';
+import { listFolder, fetchFile, renameFileAtomic, bytesToBase64 } from '../api/github.js';
 import { state } from '../state.js';
 import mammoth from 'mammoth';
 
@@ -78,6 +78,9 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
     // .docx files
     state.files.forEach(f => {
       const row = buildFileRow(f, render, onOpenFile);
+      if (state.actionBusy) {
+        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
+      }
       ul.appendChild(row);
     });
 
@@ -91,6 +94,9 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
       <button class="secondary" id="btn-new">Nuovo documento</button>
     </div>
   `);
+  if (state.actionBusy) {
+    actions.querySelectorAll('button').forEach(b => b.disabled = true);
+  }
   app.appendChild(actions);
 
   app.appendChild(el(`
@@ -167,18 +173,24 @@ function buildFileRow(f, render, onOpenFile) {
 }
 
 // actions
+let refreshSeq = 0;
+
 export async function refreshList(render) {
+  const seq = ++refreshSeq;
   state.busy = true;
   state.error = null;
   state.info = null;
   render();
   try {
     const { dirs, files } = await listFolder(state.config, state.currentFolder || state.config.folder);
+    if (seq !== refreshSeq) return; // a newer refresh has since started, discard this one
     state.dirs = dirs;
     state.files = files;
   } catch (e) {
+    if (seq !== refreshSeq) return;
     state.error = e.message;
   }
+  if (seq !== refreshSeq) return;
   state.busy = false;
   render();
 }
@@ -200,25 +212,27 @@ async function renameFile(file, newName, rowEl, render) {
     return;
   }
 
+  if (state.actionBusy) return; // an operation is already running elsewhere in the list
+
   const folder  = state.currentFolder || state.config.folder;
   const newPath = `${folder}/${finalName}`;
 
+  state.actionBusy = true;
   rowEl.querySelectorAll('button').forEach(b => b.disabled = true);
   rowEl.querySelector('.btn-rename-confirm').textContent = '…';
+  render();
 
   try {
-    const { bytes, sha } = await fetchFile(state.config, file.path);
+    const { bytes } = await fetchFile(state.config, file.path);
     const base64 = bytesToBase64(bytes);
 
-    await putFile(state.config, newPath, base64, `Rinomina ${file.name} in ${finalName}`);
-    await deleteFile(state.config, file.path, sha, `Rimuove ${file.name} (rinominato in ${finalName})`);
+    // Single commit
+    await renameFileAtomic(state.config, file.path, newPath, base64, `chore: rinomina "${file.name}" in "${finalName}"`);
 
     state.info = `"${file.name}" rinominato in "${finalName}".`;
-    await refreshList(render);
   } catch (e) {
     state.error = `Rinomina non riuscita: ${e.message}`;
-    rowEl.querySelectorAll('button').forEach(b => b.disabled = false);
-    rowEl.querySelector('.btn-rename-confirm').textContent = '✓ Rinomina';
-    render();
   }
+  state.actionBusy = false;
+  await refreshList(render);
 }
