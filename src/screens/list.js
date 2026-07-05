@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, fetchFile, renameFileAtomic, bytesToBase64 } from '../api/github.js';
+import { listFolder, renameFileAtomic } from '../api/github.js';
 import { state } from '../state.js';
 import mammoth from 'mammoth';
 
@@ -223,16 +223,16 @@ async function renameFile(file, newName, rowEl, render) {
   render();
 
   try {
-    const { bytes } = await fetchFile(state.config, file.path);
-    const base64 = bytesToBase64(bytes);
+    await renameFileAtomic(state.config, file.path, newPath, file.sha, `chore: rinomina "${file.name}" in "${finalName}"`);
 
-    // Single commit
-    await renameFileAtomic(state.config, file.path, newPath, base64, `chore: rinomina "${file.name}" in "${finalName}"`);
-
+    state.files = state.files
+      .filter(x => x.path !== file.path)
+      .concat([{ ...file, name: finalName, path: newPath }])
+      .sort((a, b) => a.name.localeCompare(b.name));
     state.info = `"${file.name}" rinominato in "${finalName}".`;
   } catch (e) {
     state.error = `Rinomina non riuscita: ${e.message}`;
   }
   state.actionBusy = false;
-  await refreshList(render);
+  render();
 }
