@@ -1,25 +1,24 @@
 import { el } from './helpers.js';
 
+const THEME_KEY = 'theme-pref';
+
 export async function loadTheme() {
   try {
-    const res = await window.storage.get('theme-pref', false);
-    if (res?.value) return res.value;
+    const val = localStorage.getItem(THEME_KEY);
+    if (val) return val;
   } catch (_) {}
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
 export async function applyTheme(t) {
   document.documentElement.setAttribute('data-theme', t === 'dark' ? 'dark' : '');
-  try { await window.storage.set('theme-pref', t, false); } catch (_) {}
+  try { localStorage.setItem(THEME_KEY, t); } catch (_) {}
 }
 
 export function currentTheme() {
   return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
 }
 
-/**
- * Returns a themed toggle button.
-*/
 export function themeToggleBtn(onToggle) {
   const isDark = currentTheme() === 'dark';
   const btn = el(`
