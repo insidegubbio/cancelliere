@@ -1,17 +1,26 @@
 const CONFIG_KEY = 'github-config';
+const THEME_KEY  = 'theme-pref';
 
 export async function loadConfig() {
   try {
-    const res = await window.storage.get(CONFIG_KEY, false);
-    if (res?.value) return JSON.parse(res.value);
+    const val = localStorage.getItem(CONFIG_KEY);
+    if (val) return JSON.parse(val);
   } catch (_) {}
   return null;
 }
 
 export async function saveConfig(cfg) {
-  await window.storage.set(CONFIG_KEY, JSON.stringify(cfg), false);
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
 }
 
 export async function clearConfig() {
-  try { await window.storage.delete(CONFIG_KEY, false); } catch (_) {}
+  localStorage.removeItem(CONFIG_KEY);
+}
+
+export async function loadThemePref() {
+  return localStorage.getItem(THEME_KEY) ?? null;
+}
+
+export async function saveThemePref(t) {
+  localStorage.setItem(THEME_KEY, t);
 }
