@@ -5,6 +5,7 @@ import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList } from './screens/list.js';
 import { fetchFile, putFile, bytesToBase64 } from './api/github.js';
 import { buildDocx } from './docx/builder.js';
+import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
 import mammoth from 'mammoth';
 
 const app = document.getElementById('app');
@@ -76,84 +77,112 @@ function onNewFile() {
   render();
 }
 
-// editor
+// editor screen
 function renderEditor() {
   const { file, html } = state.current;
-  app.innerHTML = '';
+  app.innerHTML = \'\';
 
-  // topbar
-  const topbar = document.createElement('div');
-  topbar.className = 'topbar';
-  topbar.innerHTML = `
-    <div>
-      <p class="eyebrow">Modifica documento</p>
-      <h1 class="title" style="margin-bottom:0">${escapeHtml(file.name)}</h1>
+  const top = el(`
+    <div class="editor-header">
+      <div>
+        <p class="eyebrow" style="margin-bottom:2px">${escapeHtml(state.config.folder)}/</p>
+        <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.name)}">
+      </div>
+      <button class="secondary" id="btn-back">&larr; Torna all\'elenco</button>
     </div>
-    <div class="topbar-actions">
-      <button class="secondary" id="btn-back">← Indietro</button>
+  `);
+  app.appendChild(top);
+
+  if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
+  if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
+
+  const toolbar = el(`
+    <div class="toolbar">
+      <button class="icon" data-cmd="bold" title="Grassetto"><b>B</b></button>
+      <button class="icon" data-cmd="italic" title="Corsivo"><i>I</i></button>
+      <button class="icon" data-cmd="underline" title="Sottolineato"><u>U</u></button>
+      <div class="sep"></div>
+      <button class="icon" data-block="h1" title="Titolo 1">H1</button>
+      <button class="icon" data-block="h2" title="Titolo 2">H2</button>
+      <button class="icon" data-block="h3" title="Titolo 3">H3</button>
+      <button class="icon" data-block="p" title="Paragrafo normale">P</button>
+      <div class="sep"></div>
+      <button class="icon" data-cmd="insertUnorderedList" title="Elenco puntato">&bull; &bull;</button>
+      <button class="icon" data-cmd="insertOrderedList" title="Elenco numerato">1.2.</button>
+    </div>
+  `);
+  app.appendChild(toolbar);
+
+  const surface = el(`<div class="editor-surface" contenteditable="true"></div>`);
+  surface.innerHTML = html;
+  app.appendChild(surface);
+
+  toolbar.querySelectorAll(\'button[data-cmd]\').forEach(btn => {
+    btn.addEventListener(\'click\', () => {
+      surface.focus();
+      document.execCommand(btn.dataset.cmd, false, null);
+    });
+  });
+  toolbar.querySelectorAll(\'button[data-block]\').forEach(btn => {
+    btn.addEventListener(\'click\', () => {
+      surface.focus();
+      document.execCommand(\'formatBlock\', false, btn.dataset.block);
+    });
+  });
+
+  const saveRow = el(`
+    <div class="save-row">
+      <input class="commit-msg" id="f-commit" type="text" placeholder="Messaggio di commit (opzionale)">
       <button id="btn-save">Salva su GitHub</button>
     </div>
-  `;
-  app.appendChild(topbar);
+  `);
+  app.appendChild(saveRow);
 
-  if (state.error) {
-    const banner = document.createElement('div');
-    banner.className = 'banner error';
-    banner.textContent = state.error;
-    app.appendChild(banner);
-  }
-  if (state.info) {
-    const banner = document.createElement('div');
-    banner.className = 'banner ok';
-    banner.textContent = state.info;
-    app.appendChild(banner);
-  }
+  app.appendChild(el(`
+    <footer class="note">
+      L\'editor gestisce testo, titoli (H1&ndash;H3), grassetto, corsivo, sottolineato ed elenchi.
+      Tabelle, immagini e formattazioni avanzate non vengono conservate.
+    </footer>
+  `));
 
-  // editor surface
-  const card = document.createElement('div');
-  card.className = 'card';
-
-  const surface = document.createElement('div');
-  surface.className = 'editor-surface';
-  surface.contentEditable = 'true';
-  surface.innerHTML = html;
-  card.appendChild(surface);
-  app.appendChild(card);
-
-  // footer note
-  const note = document.createElement('footer');
-  note.className = 'note';
-  note.textContent = 'Formattazione supportata: H1–H3, grassetto, corsivo, sottolineato, elenchi. Tabelle e immagini non vengono conservate.';
-  app.appendChild(note);
-
-  // events
-  topbar.querySelector('#btn-back').addEventListener('click', () => {
+  top.querySelector(\'#btn-back\').addEventListener(\'click\', () => {
     state.current = null;
     state.error = null;
     state.info = null;
-    state.screen = 'list';
+    state.screen = \'list\';
     render();
   });
 
-  topbar.querySelector('#btn-save').addEventListener('click', () => saveFile(surface));
+  document.getElementById(\'btn-save\').addEventListener(\'click\', () => saveFile(surface));
 }
 
 async function saveFile(surface) {
   state.error = null;
   state.info = null;
 
-  const btn = document.getElementById('btn-save');
-  if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
+  const newName = document.getElementById(\'f-filename\').value.trim();
+  if (!newName) { state.error = \'Il nome del file non può essere vuoto.\'; render(); return; }
+  const finalName = newName.toLowerCase().endsWith(\'.docx\') ? newName : newName + \'.docx\';
+
+  const commitMsgInput = document.getElementById(\'f-commit\').value.trim();
+  const defaultMsg = `chore: update "${finalName}"`;
+  const message = commitMsgInput || defaultMsg;
+
+  const btn = document.getElementById(\'btn-save\');
+  if (btn) { btn.disabled = true; btn.textContent = \'Salvo…\'; }
 
   try {
     const bytes = await buildDocx(surface);
     const base64 = bytesToBase64(bytes);
-    const { file, sha } = state.current;
-    const msg = sha ? `Aggiorna ${file.name}` : `Crea ${file.name}`;
-    const res = await putFile(state.config, file.path, base64, msg, sha);
-    // update sha for next save
-    state.current.sha = res?.content?.sha ?? sha;
-    state.info = `"${file.name}" salvato con successo.`;
+
+    const folder = state.currentFolder || state.config.folder;
+    const newPath = `${folder}/${finalName}`;
+    const renaming = newPath !== state.current.file.path;
+
+    const res = await putFile(state.config, newPath, base64, message, renaming ? null : state.current.sha);
+    state.current.sha = res?.content?.sha ?? state.current.sha;
+    state.current.file = { name: finalName, path: newPath };
+    state.info = `"${finalName}" salvato con successo.`;
   } catch (e) {
     state.error = `Salvataggio non riuscito: ${e.message}`;
   }
@@ -161,11 +190,7 @@ async function saveFile(surface) {
   render();
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-//boot
+// boot
 async function boot() {
   const theme = await loadTheme();
   await applyTheme(theme);
