@@ -1,0 +1,24 @@
+/**
+ * Central application state.
+ * All mutations go through direct assignment here;
+ * call render() from main.js after changing state.
+ */
+export const state = {
+  screen: 'loading',
+
+  config: null,
+
+  dirs: [],
+
+  files: [],
+
+  currentFolder: null,
+
+  error: null,
+
+  info: null,
+
+  busy: false,
+
+  current: null,
+};
