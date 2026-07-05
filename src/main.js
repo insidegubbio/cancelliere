@@ -80,7 +80,7 @@ function onNewFile() {
 // editor screen
 function renderEditor() {
   const { file, html } = state.current;
-  app.innerHTML = \'\';
+  app.innerHTML = '';
 
   const top = el(`
     <div class="editor-header">
@@ -88,7 +88,7 @@ function renderEditor() {
         <p class="eyebrow" style="margin-bottom:2px">${escapeHtml(state.config.folder)}/</p>
         <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.name)}">
       </div>
-      <button class="secondary" id="btn-back">&larr; Torna all\'elenco</button>
+      <button class="secondary" id="btn-back">&larr; Torna all'elenco</button>
     </div>
   `);
   app.appendChild(top);
@@ -117,16 +117,16 @@ function renderEditor() {
   surface.innerHTML = html;
   app.appendChild(surface);
 
-  toolbar.querySelectorAll(\'button[data-cmd]\').forEach(btn => {
-    btn.addEventListener(\'click\', () => {
+  toolbar.querySelectorAll('button[data-cmd]').forEach(btn => {
+    btn.addEventListener('click', () => {
       surface.focus();
       document.execCommand(btn.dataset.cmd, false, null);
     });
   });
-  toolbar.querySelectorAll(\'button[data-block]\').forEach(btn => {
-    btn.addEventListener(\'click\', () => {
+  toolbar.querySelectorAll('button[data-block]').forEach(btn => {
+    btn.addEventListener('click', () => {
       surface.focus();
-      document.execCommand(\'formatBlock\', false, btn.dataset.block);
+      document.execCommand('formatBlock', false, btn.dataset.block);
     });
   });
 
@@ -140,36 +140,36 @@ function renderEditor() {
 
   app.appendChild(el(`
     <footer class="note">
-      L\'editor gestisce testo, titoli (H1&ndash;H3), grassetto, corsivo, sottolineato ed elenchi.
+      L'editor gestisce testo, titoli (H1&ndash;H3), grassetto, corsivo, sottolineato ed elenchi.
       Tabelle, immagini e formattazioni avanzate non vengono conservate.
     </footer>
   `));
 
-  top.querySelector(\'#btn-back\').addEventListener(\'click\', () => {
+  top.querySelector('#btn-back').addEventListener('click', () => {
     state.current = null;
     state.error = null;
     state.info = null;
-    state.screen = \'list\';
+    state.screen = 'list';
     render();
   });
 
-  document.getElementById(\'btn-save\').addEventListener(\'click\', () => saveFile(surface));
+  document.getElementById('btn-save').addEventListener('click', () => saveFile(surface));
 }
 
 async function saveFile(surface) {
   state.error = null;
   state.info = null;
 
-  const newName = document.getElementById(\'f-filename\').value.trim();
-  if (!newName) { state.error = \'Il nome del file non può essere vuoto.\'; render(); return; }
-  const finalName = newName.toLowerCase().endsWith(\'.docx\') ? newName : newName + \'.docx\';
+  const newName = document.getElementById('f-filename').value.trim();
+  if (!newName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
+  const finalName = newName.toLowerCase().endsWith('.docx') ? newName : newName + '.docx';
 
-  const commitMsgInput = document.getElementById(\'f-commit\').value.trim();
+  const commitMsgInput = document.getElementById('f-commit').value.trim();
   const defaultMsg = `chore: update "${finalName}"`;
   const message = commitMsgInput || defaultMsg;
 
-  const btn = document.getElementById(\'btn-save\');
-  if (btn) { btn.disabled = true; btn.textContent = \'Salvo…\'; }
+  const btn = document.getElementById('btn-save');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
 
   try {
     const bytes = await buildDocx(surface);
