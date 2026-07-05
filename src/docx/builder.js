@@ -4,8 +4,16 @@ import { escapeXml } from '../ui/helpers.js';
 /**
  * Converts the content of a contenteditable surface into a .docx Uint8Array.
  */
-export async function buildDocx(surface) {
-  const bodyXml = nodesToDocxXml(surface.childNodes);
+export async function buildDocx(htmlOrSurface) {
+  let rootEl;
+  if (typeof htmlOrSurface === 'string') {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = htmlOrSurface;
+    rootEl = tmp;
+  } else {
+    rootEl = htmlOrSurface;
+  }
+  const bodyXml = nodesToDocxXml(rootEl.childNodes);
 
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -79,7 +87,7 @@ export async function buildDocx(surface) {
   return zip.generateAsync({ type: 'uint8array' });
 }
 
-// xmll serialization
+// xml serialization
 function nodesToDocxXml(nodes) {
   let xml = '';
   let sawBlock = false;
@@ -123,7 +131,7 @@ function blockNodeToXml(node) {
   return null;
 }
 
-// table
+// tables
 function tableToXml(tableNode) {
   // collect all rows from thead / tbody / tfoot / direct tr
   const rows = Array.from(tableNode.querySelectorAll('tr'));
@@ -202,7 +210,7 @@ function tableToXml(tableNode) {
   });
 
   xml += '</w:tbl>';
-  // word requires a paragraph after a table
+  // Word requires a paragraph after a table
   xml += '<w:p/>';
   return xml;
 }
