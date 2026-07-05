@@ -93,7 +93,9 @@ export function putFile(cfg, path, base64Content, commitMessage, sha) {
       const errBody = await safeJson(res);
       throw new Error(errorMessage(res.status, errBody));
     }
-    return res.json();
+    const data = await res.json();
+    invalidateHeadCache(cfg);
+    return data;
   });
 }
 
@@ -111,12 +113,20 @@ export function deleteFile(cfg, path, sha, commitMessage) {
       const errBody = await safeJson(res);
       throw new Error(errorMessage(res.status, errBody));
     }
+    invalidateHeadCache(cfg);
   });
 }
 
 // --- Git Data API helpers, used to build a single-commit rename ---
 
-async function getHeadAndTree(cfg) {
+const headCache = new Map();
+function repoKey(cfg) { return `${cfg.owner}/${cfg.repo}@${cfg.branch}`; }
+function invalidateHeadCache(cfg) { headCache.delete(repoKey(cfg)); }
+
+async function getHeadAndTree(cfg, { forceRefresh = false } = {}) {
+  const key = repoKey(cfg);
+  if (!forceRefresh && headCache.has(key)) return headCache.get(key);
+
   const res = await fetch(`${apiBase(cfg)}/commits/${encodeURIComponent(cfg.branch)}`, {
     headers: ghHeaders(cfg.token),
   });
@@ -125,7 +135,9 @@ async function getHeadAndTree(cfg) {
     throw new Error(errorMessage(res.status, body));
   }
   const data = await res.json();
-  return { headSha: data.sha, treeSha: data.commit.tree.sha };
+  const result = { headSha: data.sha, treeSha: data.commit.tree.sha };
+  headCache.set(key, result);
+  return result;
 }
 
 async function createBlob(cfg, base64Content) {
@@ -180,25 +192,29 @@ async function updateRef(cfg, commitSha) {
   return res.json();
 }
 
-// shared commit logic with a small retry
 async function commitTreeEntries(cfg, entries, commitMessage) {
+  const key = repoKey(cfg);
   let lastErr;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
     try {
-      const { headSha, treeSha } = await getHeadAndTree(cfg);
+      const { headSha, treeSha } = await getHeadAndTree(cfg, { forceRefresh: attempt > 0 });
       const tree = await createTree(cfg, treeSha, entries);
       const commit = await createCommit(cfg, commitMessage, tree.sha, headSha);
       await updateRef(cfg, commit.sha);
+      // Cache the result of our own commit
+      headCache.set(key, { headSha: commit.sha, treeSha: tree.sha });
       return commit;
     } catch (e) {
       lastErr = e;
+      headCache.delete(key); // don't trust a cached value that just failed
+      if (attempt < 3) await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
     }
   }
   throw lastErr;
 }
 
 /**
- * Rename a file in a single commit, without downloading or re-uploading its content
+ * Rename a file in a single commit, without downloading or re-uploading  its content
  */
 export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) {
   return enqueueWrite(async () => {
@@ -211,7 +227,7 @@ export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) 
 }
 
 /**
- * rename + update a file's content in a single commit
+ * Rename + update a file's content in a single commit
  */
 export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, commitMessage) {
   return enqueueWrite(async () => {
