@@ -282,7 +282,7 @@ button.icon.active { background: var(--accent-bg); border-color: var(--accent); 
   min-height: 420px;
   font-size: 15.5px;
   line-height: 1.75;
-  font-family: 'Instrument Serif', Georgia, serif;
+  font-family: 'Satoshi', system-ui, sans-serif;
   cursor: text;
 }
 .editor-surface .ProseMirror {
