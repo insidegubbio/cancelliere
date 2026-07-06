@@ -29,6 +29,11 @@ async function safeJson(res) {
   try { return await res.json(); } catch (_) { return null; }
 }
 
+// we do all in lowercase
+function normalizeCommitMessage(msg) {
+  return (msg ?? '').toString().toLowerCase();
+}
+
 /**
  * All write operations (create/update/delete/rename) are funneled through this
  * queue so that at most one mutating request is in flight at any time.
@@ -81,7 +86,7 @@ export async function fetchFile(cfg, path) {
 // create/update file on github
 export function putFile(cfg, path, base64Content, commitMessage, sha) {
   return enqueueWrite(async () => {
-    const body = { message: commitMessage, content: base64Content, branch: cfg.branch };
+    const body = { message: normalizeCommitMessage(commitMessage), content: base64Content, branch: cfg.branch };
     if (sha) body.sha = sha;
 
     const res = await fetch(`${apiBase(cfg)}/contents/${encodePath(path)}`, {
@@ -107,7 +112,7 @@ export function deleteFile(cfg, path, sha, commitMessage) {
     const res = await fetch(`${apiBase(cfg)}/contents/${encodePath(path)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json', ...ghHeaders(cfg.token) },
-      body: JSON.stringify({ message: commitMessage, sha, branch: cfg.branch }),
+      body: JSON.stringify({ message: normalizeCommitMessage(commitMessage), sha, branch: cfg.branch }),
     });
     if (!res.ok) {
       const errBody = await safeJson(res);
@@ -119,13 +124,16 @@ export function deleteFile(cfg, path, sha, commitMessage) {
 
 // --- Git Data API helpers, used to build a single-commit rename ---
 
+const HEAD_CACHE_TTL_MS = 15000;
 const headCache = new Map();
 function repoKey(cfg) { return `${cfg.owner}/${cfg.repo}@${cfg.branch}`; }
 function invalidateHeadCache(cfg) { headCache.delete(repoKey(cfg)); }
 
 async function getHeadAndTree(cfg, { forceRefresh = false } = {}) {
   const key = repoKey(cfg);
-  if (!forceRefresh && headCache.has(key)) return headCache.get(key);
+  const cached = headCache.get(key);
+  const cacheIsFresh = cached && (Date.now() - cached.cachedAt) < HEAD_CACHE_TTL_MS;
+  if (!forceRefresh && cacheIsFresh) return cached;
 
   const res = await fetch(`${apiBase(cfg)}/commits/${encodeURIComponent(cfg.branch)}`, {
     headers: ghHeaders(cfg.token),
@@ -135,7 +143,7 @@ async function getHeadAndTree(cfg, { forceRefresh = false } = {}) {
     throw new Error(errorMessage(res.status, body));
   }
   const data = await res.json();
-  const result = { headSha: data.sha, treeSha: data.commit.tree.sha };
+  const result = { headSha: data.sha, treeSha: data.commit.tree.sha, cachedAt: Date.now() };
   headCache.set(key, result);
   return result;
 }
@@ -192,17 +200,30 @@ async function updateRef(cfg, commitSha) {
   return res.json();
 }
 
-async function commitTreeEntries(cfg, entries, commitMessage) {
+// full recursive listing of a tree
+async function getRecursiveTree(cfg, treeSha) {
+  const res = await fetch(`${apiBase(cfg)}/git/trees/${treeSha}?recursive=1`, {
+    headers: ghHeaders(cfg.token),
+  });
+  if (!res.ok) {
+    const body = await safeJson(res);
+    throw new Error(errorMessage(res.status, body));
+  }
+  return res.json();
+}
+
+async function commitTreeChange(cfg, buildEntries, commitMessage) {
   const key = repoKey(cfg);
+  const message = normalizeCommitMessage(commitMessage);
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const { headSha, treeSha } = await getHeadAndTree(cfg, { forceRefresh: attempt > 0 });
+      const entries = await buildEntries(treeSha);
       const tree = await createTree(cfg, treeSha, entries);
-      const commit = await createCommit(cfg, commitMessage, tree.sha, headSha);
+      const commit = await createCommit(cfg, message, tree.sha, headSha);
       await updateRef(cfg, commit.sha);
-      // Cache the result of our own commit
-      headCache.set(key, { headSha: commit.sha, treeSha: tree.sha });
+      headCache.set(key, { headSha: commit.sha, treeSha: tree.sha, cachedAt: Date.now() });
       return commit;
     } catch (e) {
       lastErr = e;
@@ -214,11 +235,11 @@ async function commitTreeEntries(cfg, entries, commitMessage) {
 }
 
 /**
- * Rename a file in a single commit, without downloading or re-uploading  its content
+ * Rename a file in a single commit, without downloading or re-uploading its content
  */
 export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) {
   return enqueueWrite(async () => {
-    const commit = await commitTreeEntries(cfg, [
+    const commit = await commitTreeChange(cfg, async () => [
       { path: newPath, mode: '100644', type: 'blob', sha: blobSha },
       { path: oldPath, mode: '100644', type: 'blob', sha: null },
     ], commitMessage);
@@ -232,11 +253,40 @@ export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) 
 export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, commitMessage) {
   return enqueueWrite(async () => {
     const blob = await createBlob(cfg, base64Content);
-    const commit = await commitTreeEntries(cfg, [
+    const commit = await commitTreeChange(cfg, async () => [
       { path: newPath, mode: '100644', type: 'blob', sha: blob.sha },
       { path: oldPath, mode: '100644', type: 'blob', sha: null },
     ], commitMessage);
     return { commit, sha: blob.sha };
+  });
+}
+
+/**
+ * Rename a folder in a single commit
+ */
+export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMessage) {
+  return enqueueWrite(async () => {
+    const commit = await commitTreeChange(cfg, async (treeSha) => {
+      const { tree, truncated } = await getRecursiveTree(cfg, treeSha);
+      if (truncated) {
+        throw new Error('La cartella contiene troppi file per essere rinominata in un\'unica operazione.');
+      }
+
+      const prefix = oldFolderPath.endsWith('/') ? oldFolderPath : oldFolderPath + '/';
+      const matching = (tree || []).filter(entry => entry.type === 'blob' && entry.path.startsWith(prefix));
+      if (!matching.length) {
+        throw new Error('La cartella risulta vuota o non è stata trovata.');
+      }
+
+      const entries = [];
+      matching.forEach(entry => {
+        const suffix = entry.path.slice(prefix.length);
+        entries.push({ path: `${newFolderPath}/${suffix}`, mode: entry.mode, type: 'blob', sha: entry.sha });
+        entries.push({ path: entry.path, mode: entry.mode, type: 'blob', sha: null });
+      });
+      return entries;
+    }, commitMessage);
+    return { commit };
   });
 }
 
