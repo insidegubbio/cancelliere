@@ -14,6 +14,8 @@ export const state = {
 
   currentFolder: null,
 
+  searchQuery: '',
+
   error: null,
 
   info: null,
