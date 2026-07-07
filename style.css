@@ -214,6 +214,38 @@ button.icon.active { background: var(--accent-bg); border-color: var(--accent); 
 }
 .link-btn:hover { color: var(--ink); }
 
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 14px;
+}
+.search-icon {
+  position: absolute;
+  left: 13px;
+  font-size: 13px;
+  opacity: .55;
+  pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  padding: 10px 90px 10px 36px;
+  border: 1.5px solid var(--rule);
+  border-radius: var(--radius-xs);
+  background: var(--surface2);
+  font-family: 'Satoshi', sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  transition: border-color .15s, box-shadow .15s;
+}
+.search-input::placeholder { color: var(--ink-soft); opacity: .6; }
+.search-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); }
+.search-clear {
+  position: absolute;
+  right: 13px;
+  font-size: 12px;
+}
+
 .file-list { list-style: none; margin: 0; padding: 0; }
 .file-row {
   display: flex;
