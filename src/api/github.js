@@ -200,6 +200,36 @@ async function updateRef(cfg, commitSha) {
   return res.json();
 }
 
+/**
+ * search for .docx files (and matching folders) by name, recursively
+ */
+export async function searchFiles(cfg, rootFolder, query) {
+  const q = (query || '').trim().toLowerCase();
+  const { treeSha } = await getHeadAndTree(cfg);
+  const { tree, truncated } = await getRecursiveTree(cfg, treeSha);
+
+  const prefix = rootFolder.endsWith('/') ? rootFolder : rootFolder + '/';
+  const dirs = [];
+  const files = [];
+
+  (tree || []).forEach(entry => {
+    if (entry.path !== rootFolder && !entry.path.startsWith(prefix)) return;
+    const name = entry.path.split('/').pop();
+    if (!name.toLowerCase().includes(q)) return;
+
+    if (entry.type === 'tree') {
+      dirs.push({ name, path: entry.path });
+    } else if (entry.type === 'blob' && name.toLowerCase().endsWith('.docx')) {
+      files.push({ name, path: entry.path, sha: entry.sha });
+    }
+  });
+
+  dirs.sort((a, b) => a.name.localeCompare(b.name));
+  files.sort((a, b) => a.name.localeCompare(b.name));
+
+  return { dirs, files, truncated: !!truncated };
+}
+
 // full recursive listing of a tree
 async function getRecursiveTree(cfg, treeSha) {
   const res = await fetch(`${apiBase(cfg)}/git/trees/${treeSha}?recursive=1`, {
