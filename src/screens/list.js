@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic } from '../api/github.js';
+import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles } from '../api/github.js';
 import { state } from '../state.js';
 import mammoth from 'mammoth';
 
@@ -71,10 +71,14 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
   searchInput.addEventListener('input', () => {
     state.searchQuery = searchInput.value;
     searchClear.style.display = state.searchQuery ? '' : 'none';
-    renderListBody(card, render, onOpenFile);
+    scheduleSearch(render, card, onOpenFile);
   });
   searchClear.addEventListener('click', () => {
     state.searchQuery = '';
+    state.searchDirs = [];
+    state.searchFiles = [];
+    state.searchTruncated = false;
+    state.searching = false;
     searchInput.value = '';
     searchClear.style.display = 'none';
     renderListBody(card, render, onOpenFile);
@@ -107,18 +111,26 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
 function renderListBody(card, render, onOpenFile) {
   card.innerHTML = '';
 
-  const query = (state.searchQuery || '').trim().toLowerCase();
-  const dirs  = query ? state.dirs.filter(d => d.name.toLowerCase().includes(query))  : state.dirs;
-  const files = query ? state.files.filter(f => f.name.toLowerCase().includes(query)) : state.files;
+  const query      = (state.searchQuery || '').trim();
+  const searchMode = query.length > 0;
+  const dirs  = searchMode ? state.searchDirs  : state.dirs;
+  const files = searchMode ? state.searchFiles : state.files;
 
-  if (state.busy) {
-    card.appendChild(el(`<div class="empty"><span class="spinner"></span>Carico i file dal repository…</div>`));
+  if (state.busy || (searchMode && state.searching)) {
+    const label = searchMode ? 'Cerco in tutte le sottocartelle…' : 'Carico i file dal repository…';
+    card.appendChild(el(`<div class="empty"><span class="spinner"></span>${label}</div>`));
   } else if (!dirs.length && !files.length) {
-    const msg = query
-      ? `Nessun risultato per "${escapeHtml(state.searchQuery.trim())}".`
+    const msg = searchMode
+      ? `Nessun risultato per "${escapeHtml(query)}".`
       : `Nessun file .docx trovato in questa cartella.`;
     card.appendChild(el(`<div class="empty">${msg}</div>`));
   } else {
+    if (searchMode && state.searchTruncated) {
+      card.appendChild(el(`
+        <div class="banner error">Il repository è troppo grande: la ricerca potrebbe non coprire tutti i file.</div>
+      `));
+    }
+
     const ul = el(`<ul class="file-list"></ul>`);
 
     // directories
@@ -141,6 +153,53 @@ function renderListBody(card, render, onOpenFile) {
 
     card.appendChild(ul);
   }
+}
+
+// search recursive
+let searchSeq = 0;
+let searchDebounceTimer = null;
+
+function scheduleSearch(render, card, onOpenFile) {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+
+  const query = (state.searchQuery || '').trim();
+  if (!query) {
+    searchSeq++; // invalidate any in-flight search
+    state.searching = false;
+    state.searchDirs = [];
+    state.searchFiles = [];
+    state.searchTruncated = false;
+    renderListBody(card, render, onOpenFile);
+    return;
+  }
+
+  searchDebounceTimer = setTimeout(() => runSearch(render, card, onOpenFile), 300);
+  // show the spinner right away, even before the debounce fires
+  state.searching = true;
+  renderListBody(card, render, onOpenFile);
+}
+
+async function runSearch(render, card, onOpenFile) {
+  const seq = ++searchSeq;
+  const query = (state.searchQuery || '').trim();
+  const rootFolder = state.currentFolder || state.config.folder;
+
+  state.searching = true;
+  renderListBody(card, render, onOpenFile);
+
+  try {
+    const { dirs, files, truncated } = await searchFiles(state.config, rootFolder, query);
+    if (seq !== searchSeq) return; // a newer search (or a clear) has since started, discard this one
+    state.searchDirs = dirs;
+    state.searchFiles = files;
+    state.searchTruncated = truncated;
+  } catch (e) {
+    if (seq !== searchSeq) return;
+    state.error = e.message;
+  }
+  if (seq !== searchSeq) return;
+  state.searching = false;
+  renderListBody(card, render, onOpenFile);
 }
 
 function buildFileRow(f, render, onOpenFile) {
@@ -304,6 +363,52 @@ export async function refreshList(render) {
   render();
 }
 
+// parent folder of a path, e.g. "docs/a/b.docx" -> "docs/a"
+function parentFolderOf(path) {
+  const idx = path.lastIndexOf('/');
+  return idx === -1 ? '' : path.slice(0, idx);
+}
+
+function removeFileEverywhere(path) {
+  state.files = state.files.filter(x => x.path !== path);
+  state.searchFiles = state.searchFiles.filter(x => x.path !== path);
+}
+
+function removeDirEverywhere(path) {
+  state.dirs = state.dirs.filter(x => x.path !== path);
+  state.searchDirs = state.searchDirs.filter(x => x.path !== path);
+}
+
+function replaceFileEverywhere(oldPath, updatedFile) {
+  const query         = (state.searchQuery || '').trim().toLowerCase();
+  const currentFolder = state.currentFolder || state.config.folder;
+
+  state.files = state.files.filter(x => x.path !== oldPath);
+  if (parentFolderOf(updatedFile.path) === currentFolder) {
+    state.files = state.files.concat([updatedFile]).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  state.searchFiles = state.searchFiles.filter(x => x.path !== oldPath);
+  if (query && updatedFile.name.toLowerCase().includes(query)) {
+    state.searchFiles = state.searchFiles.concat([updatedFile]).sort((a, b) => a.name.localeCompare(b.name));
+  }
+}
+
+function replaceDirEverywhere(oldPath, updatedDir) {
+  const query         = (state.searchQuery || '').trim().toLowerCase();
+  const currentFolder = state.currentFolder || state.config.folder;
+
+  state.dirs = state.dirs.filter(x => x.path !== oldPath);
+  if (parentFolderOf(updatedDir.path) === currentFolder) {
+    state.dirs = state.dirs.concat([updatedDir]).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  state.searchDirs = state.searchDirs.filter(x => x.path !== oldPath);
+  if (query && updatedDir.name.toLowerCase().includes(query)) {
+    state.searchDirs = state.searchDirs.concat([updatedDir]).sort((a, b) => a.name.localeCompare(b.name));
+  }
+}
+
 function navigate(path, render) {
   state.currentFolder = path;
   state.searchQuery = '';
@@ -324,7 +429,9 @@ async function renameFile(file, newName, rowEl, render) {
 
   if (state.actionBusy) return; // an operation is already running elsewhere in the list
 
-  const folder  = state.currentFolder || state.config.folder;
+  // the file's own parent folder, not necessarily the folder currently being
+  // browsed (a rename can be triggered from a recursive search result)
+  const folder  = parentFolderOf(file.path);
   const newPath = `${folder}/${finalName}`;
 
   state.actionBusy = true;
@@ -336,11 +443,8 @@ async function renameFile(file, newName, rowEl, render) {
     // a rename doesn't change the file's bytes, so reuse the blob sha
     await renameFileAtomic(state.config, file.path, newPath, file.sha, `chore: rinomina "${file.name}" in "${finalName}"`);
 
-    // update the list in place rather than re-fetching it from github
-    state.files = state.files
-      .filter(x => x.path !== file.path)
-      .concat([{ ...file, name: finalName, path: newPath }])
-      .sort((a, b) => a.name.localeCompare(b.name));
+    // update the lists in place rather than re-fetching them from github
+    replaceFileEverywhere(file.path, { ...file, name: finalName, path: newPath });
     state.info = `"${file.name}" rinominato in "${finalName}".`;
   } catch (e) {
     state.error = `Rinomina non riuscita: ${e.message}`;
@@ -360,7 +464,7 @@ async function deleteFileAction(file, rowEl, render) {
   try {
     await deleteFile(state.config, file.path, file.sha, `chore: elimina "${file.name}"`);
 
-    state.files = state.files.filter(x => x.path !== file.path);
+    removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
   } catch (e) {
     state.error = `Eliminazione non riuscita: ${e.message}`;
@@ -381,7 +485,7 @@ async function renameFolder(dir, newName, rowEl, render) {
 
   if (state.actionBusy) return;
 
-  const parent  = state.currentFolder || state.config.folder;
+  const parent  = parentFolderOf(dir.path);
   const newPath = `${parent}/${newName}`;
 
   state.actionBusy = true;
@@ -392,10 +496,7 @@ async function renameFolder(dir, newName, rowEl, render) {
   try {
     await renameFolderAtomic(state.config, dir.path, newPath, `chore: rinomina cartella "${dir.name}" in "${newName}"`);
 
-    state.dirs = state.dirs
-      .filter(x => x.path !== dir.path)
-      .concat([{ ...dir, name: newName, path: newPath }])
-      .sort((a, b) => a.name.localeCompare(b.name));
+    replaceDirEverywhere(dir.path, { ...dir, name: newName, path: newPath });
     state.info = `Cartella "${dir.name}" rinominata in "${newName}".`;
   } catch (e) {
     state.error = `Rinomina cartella non riuscita: ${e.message}`;
