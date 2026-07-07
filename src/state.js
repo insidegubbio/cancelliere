@@ -16,6 +16,11 @@ export const state = {
 
   searchQuery: '',
 
+  searchDirs: [],
+  searchFiles: [],
+  searching: false,
+  searchTruncated: false,
+
   error: null,
 
   info: null,
