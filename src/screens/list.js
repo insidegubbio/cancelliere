@@ -48,37 +48,38 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
 
+  // search bar
+  const searchWrap = el(`
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="f-search" class="search-input" placeholder="Cerca per nome…" value="${escapeAttr(state.searchQuery || '')}" autocomplete="off">
+      <button class="link-btn search-clear" id="btn-search-clear" style="display:${state.searchQuery ? '' : 'none'}">Cancella</button>
+    </div>
+  `);
+  if (state.busy) {
+    searchWrap.querySelectorAll('input, button').forEach(elm => elm.disabled = true);
+  }
+  app.appendChild(searchWrap);
+
   // file list card
   const card = el(`<div class="card"></div>`);
-
-  if (state.busy) {
-    card.appendChild(el(`<div class="empty"><span class="spinner"></span>Carico i file dal repository…</div>`));
-  } else if (!state.dirs.length && !state.files.length) {
-    card.appendChild(el(`<div class="empty">Nessun file .docx trovato in questa cartella.</div>`));
-  } else {
-    const ul = el(`<ul class="file-list"></ul>`);
-
-    // directories
-    state.dirs.forEach(d => {
-      const row = buildDirRow(d, render);
-      if (state.actionBusy) {
-        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
-      }
-      ul.appendChild(row);
-    });
-
-    // .docx files
-    state.files.forEach(f => {
-      const row = buildFileRow(f, render, onOpenFile);
-      if (state.actionBusy) {
-        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
-      }
-      ul.appendChild(row);
-    });
-
-    card.appendChild(ul);
-  }
+  renderListBody(card, render, onOpenFile);
   app.appendChild(card);
+
+  const searchInput = searchWrap.querySelector('#f-search');
+  const searchClear = searchWrap.querySelector('#btn-search-clear');
+  searchInput.addEventListener('input', () => {
+    state.searchQuery = searchInput.value;
+    searchClear.style.display = state.searchQuery ? '' : 'none';
+    renderListBody(card, render, onOpenFile);
+  });
+  searchClear.addEventListener('click', () => {
+    state.searchQuery = '';
+    searchInput.value = '';
+    searchClear.style.display = 'none';
+    renderListBody(card, render, onOpenFile);
+    searchInput.focus();
+  });
 
   const actions = el(`
     <div class="actions">
@@ -101,6 +102,45 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
   top.querySelector('#btn-settings').addEventListener('click', onSettings);
   document.getElementById('btn-refresh').addEventListener('click', () => refreshList(render));
   document.getElementById('btn-new').addEventListener('click', onNewFile);
+}
+
+function renderListBody(card, render, onOpenFile) {
+  card.innerHTML = '';
+
+  const query = (state.searchQuery || '').trim().toLowerCase();
+  const dirs  = query ? state.dirs.filter(d => d.name.toLowerCase().includes(query))  : state.dirs;
+  const files = query ? state.files.filter(f => f.name.toLowerCase().includes(query)) : state.files;
+
+  if (state.busy) {
+    card.appendChild(el(`<div class="empty"><span class="spinner"></span>Carico i file dal repository…</div>`));
+  } else if (!dirs.length && !files.length) {
+    const msg = query
+      ? `Nessun risultato per "${escapeHtml(state.searchQuery.trim())}".`
+      : `Nessun file .docx trovato in questa cartella.`;
+    card.appendChild(el(`<div class="empty">${msg}</div>`));
+  } else {
+    const ul = el(`<ul class="file-list"></ul>`);
+
+    // directories
+    dirs.forEach(d => {
+      const row = buildDirRow(d, render);
+      if (state.actionBusy) {
+        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
+      }
+      ul.appendChild(row);
+    });
+
+    // .docx files
+    files.forEach(f => {
+      const row = buildFileRow(f, render, onOpenFile);
+      if (state.actionBusy) {
+        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
+      }
+      ul.appendChild(row);
+    });
+
+    card.appendChild(ul);
+  }
 }
 
 function buildFileRow(f, render, onOpenFile) {
@@ -266,6 +306,7 @@ export async function refreshList(render) {
 
 function navigate(path, render) {
   state.currentFolder = path;
+  state.searchQuery = '';
   refreshList(render);
 }
 
