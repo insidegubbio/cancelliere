@@ -67,6 +67,7 @@ async function onOpenFile(file) {
     // images lost sadly
     const hasImages = result.value.includes('<img');
     state.current = { file, sha, html: result.value, hasImages };
+    state.busy = false;
     state.screen = 'editor';
     render();
   } catch (e) {
