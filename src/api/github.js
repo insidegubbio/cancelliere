@@ -321,6 +321,13 @@ export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMess
 }
 
 // helpers
+// create folder
+export function createFolder(cfg, folderPath, commitMessage) {
+  const placeholderPath = `${folderPath}/.gitkeep`;
+  // empty file: base64 of ""
+  return putFile(cfg, placeholderPath, '', commitMessage, null);
+}
+
 export function base64ToBytes(b64) {
   const clean = b64.replace(/\s/g, '');
   const bin = atob(clean);

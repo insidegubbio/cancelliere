@@ -3,7 +3,7 @@ import { loadConfig } from './api/storage.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList } from './screens/list.js';
-import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64 } from './api/github.js';
+import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, createFolder } from './api/github.js';
 import { buildDocx } from './docx/builder.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
 import mammoth from 'mammoth';
@@ -20,7 +20,7 @@ function render() {
     return;
   }
   if (state.screen === 'list') {
-    renderList(app, render, onOpenFile, onSettings, onNewFile);
+    renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder);
     return;
   }
   if (state.screen === 'editor') {
@@ -89,6 +89,32 @@ function onNewFile() {
     html: '<p></p>',
   };
   state.screen = 'editor';
+  render();
+}
+
+// new folder
+async function onNewFolder() {
+  const name = prompt('Nome della nuova cartella:');
+  if (!name || !name.trim()) return;
+  const folderName = name.trim();
+
+  const folder = state.currentFolder || state.config.folder;
+  const newFolderPath = `${folder}/${folderName}`;
+
+  state.actionBusy = true;
+  state.error = null;
+  state.info = null;
+  render();
+
+  try {
+    await createFolder(state.config, newFolderPath, `chore: crea cartella "${folderName}"`);
+    state.dirs = [...state.dirs, { name: folderName, path: newFolderPath }]
+      .sort((a, b) => a.name.localeCompare(b.name));
+    state.info = `Cartella "${folderName}" creata.`;
+  } catch (e) {
+    state.error = `Impossibile creare la cartella: ${e.message}`;
+  }
+  state.actionBusy = false;
   render();
 }
 
