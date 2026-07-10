@@ -1,10 +1,10 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles } from '../api/github.js';
+import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder } from '../api/github.js';
 import { state } from '../state.js';
 import mammoth from 'mammoth';
 
-export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
+export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
   app.innerHTML = '';
 
   // breadcrumb
@@ -88,6 +88,7 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
   const actions = el(`
     <div class="actions">
       <button class="secondary" id="btn-refresh">Aggiorna elenco</button>
+      <button class="secondary" id="btn-new-folder">📁 Nuova cartella</button>
       <button class="secondary" id="btn-new">Nuovo documento</button>
     </div>
   `);
@@ -105,6 +106,7 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile) {
 
   top.querySelector('#btn-settings').addEventListener('click', onSettings);
   document.getElementById('btn-refresh').addEventListener('click', () => refreshList(render));
+  document.getElementById('btn-new-folder').addEventListener('click', onNewFolder);
   document.getElementById('btn-new').addEventListener('click', onNewFile);
 }
 
