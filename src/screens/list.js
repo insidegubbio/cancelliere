@@ -366,7 +366,7 @@ export async function refreshList(render) {
 }
 
 // parent folder of a path, e.g. "docs/a/b.docx" -> "docs/a"
-function parentFolderOf(path) {
+export function parentFolderOf(path) {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? '' : path.slice(0, idx);
 }
