@@ -1,8 +1,9 @@
 import { state } from './state.js';
-import { loadConfig } from './api/storage.js';
+import { loadConfig, saveConfig } from './api/storage.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList } from './screens/list.js';
+import { handleGithubCallback } from './api/oauth.js';
 import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, createFolder } from './api/github.js';
 import { buildDocx } from './docx/builder.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
@@ -27,11 +28,9 @@ function render() {
     renderEditor();
     return;
   }
-  // loading
   app.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--ink-soft)"><span class="spinner"></span></div>';
 }
 
-//  callbacks
 async function onConnect(cfg) {
   state.config = cfg;
   state.error = null;
@@ -46,7 +45,6 @@ function onSettings() {
   render();
 }
 
-// open file
 async function onOpenFile(file) {
   state.busy = true;
   state.error = null;
@@ -64,7 +62,6 @@ async function onOpenFile(file) {
         })
       }
     );
-    // images lost sadly
     const hasImages = result.value.includes('<img');
     state.current = { file, sha, html: result.value, hasImages };
     state.busy = false;
@@ -77,7 +74,6 @@ async function onOpenFile(file) {
   }
 }
 
-// new file
 function onNewFile() {
   const name = prompt('Nome del nuovo documento (senza estensione):');
   if (!name || !name.trim()) return;
@@ -92,7 +88,6 @@ function onNewFile() {
   render();
 }
 
-// new folder
 async function onNewFolder() {
   const name = prompt('Nome della nuova cartella:');
   if (!name || !name.trim()) return;
@@ -118,12 +113,10 @@ async function onNewFolder() {
   render();
 }
 
-// editor screen
 function renderEditor() {
   const { file, html } = state.current;
   app.innerHTML = '';
 
-  // header
   const top = el(`
     <div class="editor-header">
       <div>
@@ -139,7 +132,6 @@ function renderEditor() {
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
   if (state.current?.hasImages) app.appendChild(el(`<div class="banner warn">⚠️ Questo documento contiene immagini che non verranno conservate al salvataggio.</div>`));
 
-  // toolbar
   const toolbar = el(`
     <div class="toolbar">
       <button class="icon" data-action="bold" title="Grassetto"><b>B</b></button>
@@ -164,12 +156,10 @@ function renderEditor() {
   `);
   app.appendChild(toolbar);
 
-  // editor container
   const editorEl = document.createElement('div');
   editorEl.className = 'editor-surface';
   app.appendChild(editorEl);
 
-  // init Tiptap
   const editor = new Editor({
     element: editorEl,
     extensions: [
@@ -184,7 +174,6 @@ function renderEditor() {
     autofocus: true,
   });
 
-  // toolbar actions
   toolbar.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => {
       const a = btn.dataset.action;
@@ -207,11 +196,9 @@ function renderEditor() {
     });
   });
 
-  // update toolbar active states
   editor.on('selectionUpdate', () => updateToolbar(editor, toolbar));
   editor.on('transaction',     () => updateToolbar(editor, toolbar));
 
-  // save row
   const saveRow = el(`
     <div class="save-row">
       <input class="commit-msg" id="f-commit" type="text" placeholder="Messaggio di commit (opzionale)">
@@ -237,7 +224,6 @@ function renderEditor() {
   });
 
   document.getElementById('btn-save').addEventListener('click', () => {
-    // pass the editor html to savefile instead of a dom surface
     saveFile(editor.getHTML());
   });
 }
@@ -284,12 +270,10 @@ async function saveFile(htmlContent) {
 
     if (renaming) {
       if (state.current.sha) {
-        // existing file so rename + save content in one commit.
         const commitMsg = commitMsgInput || `chore: rinomina "${state.current.file.name}" in "${finalName}"`;
         const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
         state.current.sha = newSha;
       } else {
-        // brand new, unsaved file so just create it.
         const createRes = await putFile(state.config, newPath, base64, message, null);
         state.current.sha = createRes?.content?.sha ?? null;
       }
@@ -306,11 +290,37 @@ async function saveFile(htmlContent) {
   render();
 }
 
-
-// boot
 async function boot() {
   const theme = await loadTheme();
   await applyTheme(theme);
+
+  try {
+    const oauthResult = await handleGithubCallback();
+    if (oauthResult) {
+      const { token, draft } = oauthResult;
+      const cfg = {
+        owner:  draft.owner  || '',
+        repo:   draft.repo   || '',
+        branch: draft.branch || 'main',
+        folder: draft.folder || 'docs',
+        token,
+      };
+      if (cfg.owner && cfg.repo) {
+        if (draft.remember !== false) await saveConfig(cfg);
+        await onConnect(cfg);
+      } else {
+        state.config = cfg;
+        state.screen = 'setup';
+        render();
+      }
+      return;
+    }
+  } catch (e) {
+    state.error = e.message;
+    state.screen = 'setup';
+    render();
+    return;
+  }
 
   const cfg = await loadConfig();
   if (cfg) {
