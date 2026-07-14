@@ -1,4 +1,4 @@
-const GITHUB_CLIENT_ID = 'INSERISCI_QUI_IL_CLIENT_ID';
+const GITHUB_CLIENT_ID = import.meta.env.VITE_GITHUB_CLIENT_ID;
 const OAUTH_CALLBACK_URL = '/api/oauth/callback';
 
 const STATE_KEY = 'gh_oauth_state';
