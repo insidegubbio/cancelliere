@@ -64,43 +64,6 @@ body {
 }
 .topbar-actions { display: flex; align-items: center; gap: 10px; }
 
-.btn-github {
-  width: 100%;
-  margin-top: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 9px;
-  background: #24292f;
-  border-color: #24292f;
-  color: #fff;
-  padding: 11px 18px;
-}
-.btn-github:hover { opacity: .88; }
-.btn-github svg { flex-shrink: 0; }
-
-.oauth-divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 18px 0;
-  font-size: 12px;
-  color: var(--ink-soft);
-  text-transform: uppercase;
-  letter-spacing: .04em;
-}
-.oauth-divider::before,
-.oauth-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--rule);
-}
-
-.pat-section {
-  margin-top: 6px;
-  padding-top: 6px;
-}
 .theme-toggle {
   background: var(--surface2);
   border: 1px solid var(--rule);
@@ -237,6 +200,40 @@ button.icon {
 }
 button.icon:hover { background: var(--surface2); opacity: 1; }
 button.icon.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+
+.btn-github {
+  width: 100%;
+  margin-top: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 11px 18px;
+}
+.btn-github svg { flex-shrink: 0; }
+
+.oauth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.oauth-divider::before,
+.oauth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--rule);
+}
+
+.pat-section {
+  margin-top: 6px;
+  padding-top: 6px;
+}
 
 .link-btn {
   background: none;
