@@ -117,13 +117,12 @@ function onNewFile() {
   const name = prompt('Nome del nuovo file JSON (senza estensione):');
   if (!name || !name.trim()) return;
   const slug = name.trim().toLowerCase().replace(/\s+/g, '-');
-  const finalName = slug.endsWith('.json') ? slug : slug + '.json';
   const folder = state.currentFolder || state.config.folder;
   const category = folder.split('/').pop();
   state.current = {
-    file: { name: finalName, path: `${folder}/${finalName}` },
+    file: { name: slug, slug, path: `${folder}/${slug}` },
     sha: null,
-    doc: emptyJsonDoc(slug.replace('.json', ''), category),
+    doc: emptyJsonDoc(slug, category),
   };
   state.screen = 'editor';
   render();
@@ -162,7 +161,7 @@ function renderEditor() {
     <div class="editor-header">
       <div>
         <p class="eyebrow" style="margin-bottom:4px">${escapeHtml(state.config.folder)}/</p>
-        <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.name)}">
+        <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.slug || file.name)}">
       </div>
       <button class="secondary" id="btn-back">&larr; Torna all'elenco</button>
     </div>
@@ -243,7 +242,7 @@ function renderEditor() {
   const saveRow = el(`
     <div class="save-row">
       <input class="commit-msg" id="f-commit" type="text" placeholder="Messaggio di commit (opzionale)">
-      <button id="btn-save">Salva su GitHub</button>
+      <button class="btn-primary" id="btn-save">Salva su GitHub</button>
     </div>
   `);
   app.appendChild(saveRow);
@@ -290,9 +289,11 @@ async function saveFile(htmlContent) {
   state.error = null;
   state.info = null;
 
-  const newName = document.getElementById('f-filename').value.trim();
-  if (!newName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
-  const finalName = newName.toLowerCase().endsWith('.json') ? newName : newName + '.json';
+  const rawName = document.getElementById('f-filename').value.trim();
+  if (!rawName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
+  const finalName = rawName.toLowerCase().endsWith('.json')
+    ? rawName.slice(0, -5)
+    : rawName;
 
   const commitMsgInput = document.getElementById('f-commit').value.trim();
   const message = commitMsgInput || `chore: update "${finalName}"`;
@@ -310,6 +311,7 @@ async function saveFile(htmlContent) {
 
     const newDoc = {
       ...doc,
+      slug: finalName,
       body,
       full_text: fullText,
       word_count: fullText.trim() ? fullText.trim().split(/\s+/).filter(Boolean).length : 0,
@@ -339,7 +341,7 @@ async function saveFile(htmlContent) {
         const createRes = await putFile(state.config, newPath, base64, message, null);
         state.current.sha = createRes?.content?.sha ?? null;
       }
-      state.current.file = { name: finalName, path: newPath };
+      state.current.file = { name: finalName, slug: finalName, path: newPath };
     } else {
       const res = await putFile(state.config, newPath, base64, message, state.current.sha);
       state.current.sha = res?.content?.sha ?? state.current.sha;
