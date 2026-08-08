@@ -4,16 +4,63 @@ import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, createFolder } from './api/github.js';
-import { buildDocx } from './docx/builder.js';
+import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { bodyToHtml, htmlToBody, bodyToPlainText } from './json/body.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
-import mammoth from 'mammoth';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Underline } from '@tiptap/extension-underline';
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 
 const app = document.getElementById('app');
+let editor = null;
+
+function emptyJsonDoc(slug, category) {
+  const now = new Date().toISOString();
+  return {
+    slug: slug || '',
+    title: '',
+    summary: '',
+    category: category || '',
+    word_count: 0,
+    category_name: '',
+    full_text: '',
+    body: [],
+    images: [],
+    core_properties: {
+      title: '',
+      subject: '',
+      author: '',
+      last_modified_by: '',
+      created: now,
+      modified: now,
+      category: '',
+      comments: '',
+      keywords: '',
+      language: '',
+      revision: 0,
+    },
+  };
+}
+
+function jsonToBase64(obj) {
+  const str = JSON.stringify(obj, null, 2);
+  const bytes = new TextEncoder().encode(str);
+  return bytesToBase64(bytes);
+}
+
+function bytesToJson(bytes) {
+  const str = new TextDecoder().decode(bytes);
+  return JSON.parse(str);
+}
+
+async function ensureUsername() {
+  if (!state.config) return null;
+  if (!state.config.username) {
+    state.config.username = await getAuthenticatedUser(state.config);
+  }
+  return state.config.username;
+}
 
 function render() {
   if (state.screen === 'setup') {
@@ -28,16 +75,15 @@ function render() {
     renderEditor();
     return;
   }
-  // loading
   app.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--ink-soft)"><span class="spinner"></span></div>';
 }
 
-//  callbacks
 async function onConnect(cfg) {
   state.config = cfg;
   state.error = null;
   state.screen = 'list';
   await refreshList(render);
+  ensureUsername();
 }
 
 function onSettings() {
@@ -47,7 +93,6 @@ function onSettings() {
   render();
 }
 
-// open file
 async function onOpenFile(file) {
   state.busy = true;
   state.error = null;
@@ -56,18 +101,8 @@ async function onOpenFile(file) {
 
   try {
     const { bytes, sha } = await fetchFile(state.config, file.path);
-    const result = await mammoth.convertToHtml(
-      { arrayBuffer: bytes.buffer },
-      { convertImage: mammoth.images.imgElement(image => {
-          return image.read('base64').then(data => ({
-            src: `data:${image.contentType};base64,${data}`,
-          }));
-        })
-      }
-    );
-    // images lost sadly
-    const hasImages = result.value.includes('<img');
-    state.current = { file, sha, html: result.value, hasImages };
+    const doc = bytesToJson(bytes);
+    state.current = { file, sha, doc };
     state.busy = false;
     state.screen = 'editor';
     render();
@@ -78,22 +113,21 @@ async function onOpenFile(file) {
   }
 }
 
-// new file
 function onNewFile() {
-  const name = prompt('Nome del nuovo documento (senza estensione):');
+  const name = prompt('Nome del nuovo file JSON (senza estensione):');
   if (!name || !name.trim()) return;
-  const finalName = name.trim().toLowerCase().endsWith('.docx') ? name.trim() : name.trim() + '.docx';
+  const slug = name.trim().toLowerCase().replace(/\s+/g, '-');
   const folder = state.currentFolder || state.config.folder;
+  const category = folder.split('/').pop();
   state.current = {
-    file: { name: finalName, path: `${folder}/${finalName}` },
+    file: { name: slug, slug, path: `${folder}/${slug}` },
     sha: null,
-    html: '<p></p>',
+    doc: emptyJsonDoc(slug, category),
   };
   state.screen = 'editor';
   render();
 }
 
-// new folder
 async function onNewFolder() {
   const name = prompt('Nome della nuova cartella:');
   if (!name || !name.trim()) return;
@@ -119,17 +153,15 @@ async function onNewFolder() {
   render();
 }
 
-// editor screen
 function renderEditor() {
-  const { file, html } = state.current;
+  const { file, doc } = state.current;
   app.innerHTML = '';
 
-  // header
   const top = el(`
     <div class="editor-header">
       <div>
-        <p class="eyebrow" style="margin-bottom:2px">${escapeHtml(state.config.folder)}/</p>
-        <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.name)}">
+        <p class="eyebrow" style="margin-bottom:4px">${escapeHtml(state.config.folder)}/</p>
+        <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.slug || file.name)}">
       </div>
       <button class="secondary" id="btn-back">&larr; Torna all'elenco</button>
     </div>
@@ -138,7 +170,6 @@ function renderEditor() {
 
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
-  if (state.current?.hasImages) app.appendChild(el(`<div class="banner warn">⚠️ Questo documento contiene immagini che non verranno conservate al salvataggio.</div>`));
 
   // toolbar
   const toolbar = el(`
@@ -165,13 +196,11 @@ function renderEditor() {
   `);
   app.appendChild(toolbar);
 
-  // editor container
   const editorEl = document.createElement('div');
   editorEl.className = 'editor-surface';
   app.appendChild(editorEl);
 
-  // init Tiptap
-  const editor = new Editor({
+  editor = new Editor({
     element: editorEl,
     extensions: [
       StarterKit,
@@ -181,11 +210,10 @@ function renderEditor() {
       TableHeader,
       TableCell,
     ],
-    content: html,
+    content: bodyToHtml(doc.body),
     autofocus: true,
   });
 
-  // toolbar actions
   toolbar.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => {
       const a = btn.dataset.action;
@@ -208,28 +236,27 @@ function renderEditor() {
     });
   });
 
-  // update toolbar active states
   editor.on('selectionUpdate', () => updateToolbar(editor, toolbar));
   editor.on('transaction',     () => updateToolbar(editor, toolbar));
 
-  // save row
   const saveRow = el(`
     <div class="save-row">
       <input class="commit-msg" id="f-commit" type="text" placeholder="Messaggio di commit (opzionale)">
-      <button id="btn-save">Salva su GitHub</button>
+      <button class="btn-primary" id="btn-save">Salva su GitHub</button>
     </div>
   `);
   app.appendChild(saveRow);
 
   app.appendChild(el(`
     <footer class="note">
-      L'editor gestisce testo, titoli (H1–H3), grassetto, corsivo, sottolineato, elenchi e tabelle.
-      Le immagini non vengono conservate al salvataggio.
+      Slug, titolo, categoria, riepilogo e immagini restano invariati e vengono preservati così come sono nel file.
+      Autore ultima modifica, titolo (meta) e data di modifica si aggiornano automaticamente a ogni salvataggio.
     </footer>
   `));
 
   top.querySelector('#btn-back').addEventListener('click', () => {
     editor.destroy();
+    editor = null;
     state.current = null;
     state.error = null;
     state.info = null;
@@ -237,10 +264,7 @@ function renderEditor() {
     render();
   });
 
-  document.getElementById('btn-save').addEventListener('click', () => {
-    // pass the editor html to savefile instead of a dom surface
-    saveFile(editor.getHTML());
-  });
+  document.getElementById('btn-save').addEventListener('click', () => saveFile(editor.getHTML()));
 }
 
 function updateToolbar(editor, toolbar) {
@@ -265,9 +289,11 @@ async function saveFile(htmlContent) {
   state.error = null;
   state.info = null;
 
-  const newName = document.getElementById('f-filename').value.trim();
-  if (!newName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
-  const finalName = newName.toLowerCase().endsWith('.docx') ? newName : newName + '.docx';
+  const rawName = document.getElementById('f-filename').value.trim();
+  if (!rawName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
+  const finalName = rawName.toLowerCase().endsWith('.json')
+    ? rawName.slice(0, -5)
+    : rawName;
 
   const commitMsgInput = document.getElementById('f-commit').value.trim();
   const message = commitMsgInput || `chore: update "${finalName}"`;
@@ -276,8 +302,29 @@ async function saveFile(htmlContent) {
   if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
 
   try {
-    const bytes = await buildDocx(htmlContent);
-    const base64 = bytesToBase64(bytes);
+    const username = await ensureUsername();
+    const { doc } = state.current;
+    const cp = doc.core_properties || {};
+    const now = new Date().toISOString();
+    const body = htmlToBody(htmlContent);
+    const fullText = bodyToPlainText(body);
+
+    const newDoc = {
+      ...doc,
+      slug: finalName,
+      body,
+      full_text: fullText,
+      word_count: fullText.trim() ? fullText.trim().split(/\s+/).filter(Boolean).length : 0,
+      core_properties: {
+        ...cp,
+        last_modified_by: username || cp.last_modified_by || '',
+        title: doc.title || cp.title || '',
+        modified: now,
+        revision: (cp.revision ?? 0) + 1,
+      },
+    };
+
+    const base64 = jsonToBase64(newDoc);
 
     const folder = state.current.sha
       ? parentFolderOf(state.current.file.path)
@@ -287,20 +334,20 @@ async function saveFile(htmlContent) {
 
     if (renaming) {
       if (state.current.sha) {
-        // existing file so rename + save content in one commit.
         const commitMsg = commitMsgInput || `chore: rinomina "${state.current.file.name}" in "${finalName}"`;
         const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
         state.current.sha = newSha;
       } else {
-        // brand new, unsaved file so just create it.
         const createRes = await putFile(state.config, newPath, base64, message, null);
         state.current.sha = createRes?.content?.sha ?? null;
       }
-      state.current.file = { name: finalName, path: newPath };
+      state.current.file = { name: finalName, slug: finalName, path: newPath };
     } else {
       const res = await putFile(state.config, newPath, base64, message, state.current.sha);
       state.current.sha = res?.content?.sha ?? state.current.sha;
     }
+
+    state.current.doc = newDoc;
     state.info = `"${finalName}" salvato con successo.`;
   } catch (e) {
     state.error = `Salvataggio non riuscito: ${e.message}`;
@@ -309,8 +356,6 @@ async function saveFile(htmlContent) {
   render();
 }
 
-
-// boot
 async function boot() {
   const theme = await loadTheme();
   await applyTheme(theme);
@@ -348,6 +393,7 @@ async function boot() {
     state.config = cfg;
     state.screen = 'list';
     await refreshList(render);
+    ensureUsername();
   } else {
     state.screen = 'setup';
     render();

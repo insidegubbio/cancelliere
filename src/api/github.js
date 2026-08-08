@@ -1,7 +1,3 @@
-/**
- * All GitHub REST API interactions.
- */
-
 function ghHeaders(token) {
   return {
     'Authorization': 'token ' + token,
@@ -13,8 +9,26 @@ function apiBase(cfg) {
   return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`;
 }
 
+export async function getAuthenticatedUser(cfg) {
+  try {
+    const res = await fetch('https://api.github.com/user', { headers: ghHeaders(cfg.token) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.login || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function encodePath(path) {
   return path.split('/').map(encodeURIComponent).join('/');
+}
+
+function isJsonLikeName(name) {
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.json')) return true;
+  const base = name.replace(/^\.+/, '');
+  return base.length > 0 && !base.includes('.');
 }
 
 function errorMessage(status, body) {
@@ -29,15 +43,10 @@ async function safeJson(res) {
   try { return await res.json(); } catch (_) { return null; }
 }
 
-// we do all in lowercase
 function normalizeCommitMessage(msg) {
   return (msg ?? '').toString().toLowerCase();
 }
 
-/**
- * All write operations (create/update/delete/rename) are funneled through this
- * queue so that at most one mutating request is in flight at any time.
- */
 let writeQueue = Promise.resolve();
 function enqueueWrite(task) {
   const run = writeQueue.then(task, task);
@@ -45,7 +54,6 @@ function enqueueWrite(task) {
   return run;
 }
 
-// list folder contents
 export async function listFolder(cfg, folderPath) {
   const url = `${apiBase(cfg)}/contents/${encodePath(folderPath)}?ref=${encodeURIComponent(cfg.branch)}`;
   const res = await fetch(url, { headers: ghHeaders(cfg.token) });
@@ -57,12 +65,11 @@ export async function listFolder(cfg, folderPath) {
   const list = Array.isArray(data) ? data : [];
   return {
     dirs:  list.filter(f => f.type === 'dir').sort((a, b) => a.name.localeCompare(b.name)),
-    files: list.filter(f => f.type === 'file' && f.name.toLowerCase().endsWith('.docx'))
+    files: list.filter(f => f.type === 'file' && isJsonLikeName(f.name))
                .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 
-// fetch files raw bytes
 export async function fetchFile(cfg, path) {
   const url = `${apiBase(cfg)}/contents/${encodePath(path)}?ref=${encodeURIComponent(cfg.branch)}`;
   const res = await fetch(url, { headers: ghHeaders(cfg.token) });
@@ -83,7 +90,6 @@ export async function fetchFile(cfg, path) {
   return { bytes: base64ToBytes(base64), sha: data.sha };
 }
 
-// create/update file on github
 export function putFile(cfg, path, base64Content, commitMessage, sha) {
   return enqueueWrite(async () => {
     const body = { message: normalizeCommitMessage(commitMessage), content: base64Content, branch: cfg.branch };
@@ -104,9 +110,6 @@ export function putFile(cfg, path, base64Content, commitMessage, sha) {
   });
 }
 
-/**
- * Delete a file on GitHub.
- */
 export function deleteFile(cfg, path, sha, commitMessage) {
   return enqueueWrite(async () => {
     const res = await fetch(`${apiBase(cfg)}/contents/${encodePath(path)}`, {
@@ -121,8 +124,6 @@ export function deleteFile(cfg, path, sha, commitMessage) {
     invalidateHeadCache(cfg);
   });
 }
-
-// --- Git Data API helpers, used to build a single-commit rename ---
 
 const HEAD_CACHE_TTL_MS = 15000;
 const headCache = new Map();
@@ -200,9 +201,6 @@ async function updateRef(cfg, commitSha) {
   return res.json();
 }
 
-/**
- * search for .docx files (and matching folders) by name, recursively
- */
 export async function searchFiles(cfg, rootFolder, query) {
   const q = (query || '').trim().toLowerCase();
   const { treeSha } = await getHeadAndTree(cfg);
@@ -219,7 +217,7 @@ export async function searchFiles(cfg, rootFolder, query) {
 
     if (entry.type === 'tree') {
       dirs.push({ name, path: entry.path });
-    } else if (entry.type === 'blob' && name.toLowerCase().endsWith('.docx')) {
+    } else if (entry.type === 'blob' && isJsonLikeName(name)) {
       files.push({ name, path: entry.path, sha: entry.sha });
     }
   });
@@ -230,7 +228,6 @@ export async function searchFiles(cfg, rootFolder, query) {
   return { dirs, files, truncated: !!truncated };
 }
 
-// full recursive listing of a tree
 async function getRecursiveTree(cfg, treeSha) {
   const res = await fetch(`${apiBase(cfg)}/git/trees/${treeSha}?recursive=1`, {
     headers: ghHeaders(cfg.token),
@@ -257,16 +254,13 @@ async function commitTreeChange(cfg, buildEntries, commitMessage) {
       return commit;
     } catch (e) {
       lastErr = e;
-      headCache.delete(key); // don't trust a cached value that just failed
+      headCache.delete(key);
       if (attempt < 3) await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
     }
   }
   throw lastErr;
 }
 
-/**
- * Rename a file in a single commit, without downloading or re-uploading its content
- */
 export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async () => [
@@ -277,9 +271,6 @@ export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) 
   });
 }
 
-/**
- * Rename + update a file's content in a single commit
- */
 export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, commitMessage) {
   return enqueueWrite(async () => {
     const blob = await createBlob(cfg, base64Content);
@@ -291,9 +282,6 @@ export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, 
   });
 }
 
-/**
- * Rename a folder in a single commit
- */
 export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async (treeSha) => {
@@ -320,11 +308,8 @@ export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMess
   });
 }
 
-// helpers
-// create folder
 export function createFolder(cfg, folderPath, commitMessage) {
   const placeholderPath = `${folderPath}/.gitkeep`;
-  // empty file: base64 of ""
   return putFile(cfg, placeholderPath, '', commitMessage, null);
 }
 
