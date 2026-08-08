@@ -4,10 +4,16 @@ import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder } from './api/github.js';
+import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { bodyToHtml, htmlToBody, bodyToPlainText } from './json/body.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
+import { Editor } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
+import { Underline } from '@tiptap/extension-underline';
+import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 
 const app = document.getElementById('app');
+let editor = null;
 
 function emptyJsonDoc(slug, category) {
   const now = new Date().toISOString();
@@ -48,6 +54,14 @@ function bytesToJson(bytes) {
   return JSON.parse(str);
 }
 
+async function ensureUsername() {
+  if (!state.config) return null;
+  if (!state.config.username) {
+    state.config.username = await getAuthenticatedUser(state.config);
+  }
+  return state.config.username;
+}
+
 function render() {
   if (state.screen === 'setup') {
     renderSetup(app, state.config, state.error, onConnect, render);
@@ -69,6 +83,7 @@ async function onConnect(cfg) {
   state.error = null;
   state.screen = 'list';
   await refreshList(render);
+  ensureUsername();
 }
 
 function onSettings() {
@@ -157,93 +172,73 @@ function renderEditor() {
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
 
-  const cp = doc.core_properties || {};
-
-  const fieldsCard = el(`
-    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);margin-bottom:18px">
-      <p class="meta-panel-title">Campi principali</p>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 18px">
-        <div>
-          <label for="f-slug">Slug</label>
-          <input type="text" id="f-slug" value="${escapeAttr(doc.slug || '')}">
-        </div>
-        <div>
-          <label for="f-title">Titolo</label>
-          <input type="text" id="f-title" value="${escapeAttr(doc.title || '')}">
-        </div>
-        <div>
-          <label for="f-category">Category (slug)</label>
-          <input type="text" id="f-category" value="${escapeAttr(doc.category || '')}">
-        </div>
-        <div>
-          <label for="f-category-name">Category name</label>
-          <input type="text" id="f-category-name" value="${escapeAttr(doc.category_name || '')}">
-        </div>
-      </div>
-      <div style="margin-top:12px">
-        <label for="f-summary">Summary</label>
-        <textarea id="f-summary" rows="3" style="width:100%;padding:10px 13px;border:1.5px solid var(--rule);border-radius:var(--radius-xs);background:var(--surface);font-family:inherit;font-size:14px;color:var(--ink);resize:vertical;line-height:1.6">${escapeHtml(doc.summary || '')}</textarea>
-      </div>
-      <div style="margin-top:12px">
-        <label for="f-fulltext">Testo completo (full_text)</label>
-        <textarea id="f-fulltext" rows="10" style="width:100%;padding:10px 13px;border:1.5px solid var(--rule);border-radius:var(--radius-xs);background:var(--surface);font-family:inherit;font-size:14px;color:var(--ink);resize:vertical;line-height:1.6">${escapeHtml(doc.full_text || '')}</textarea>
-      </div>
+  // toolbar
+  const toolbar = el(`
+    <div class="toolbar">
+      <button class="icon" data-action="bold" title="Grassetto"><b>B</b></button>
+      <button class="icon" data-action="italic" title="Corsivo"><i>I</i></button>
+      <button class="icon" data-action="underline" title="Sottolineato"><u>U</u></button>
+      <div class="sep"></div>
+      <button class="icon" data-action="h1" title="Titolo 1">H1</button>
+      <button class="icon" data-action="h2" title="Titolo 2">H2</button>
+      <button class="icon" data-action="h3" title="Titolo 3">H3</button>
+      <button class="icon" data-action="p" title="Paragrafo">P</button>
+      <div class="sep"></div>
+      <button class="icon" data-action="ul" title="Elenco puntato">&bull; &bull;</button>
+      <button class="icon" data-action="ol" title="Elenco numerato">1.2.</button>
+      <div class="sep"></div>
+      <button class="icon" data-action="table" title="Inserisci tabella">⊞</button>
+      <button class="icon" data-action="addRowAfter" title="Aggiungi riga">+↓</button>
+      <button class="icon" data-action="addColumnAfter" title="Aggiungi colonna">+→</button>
+      <button class="icon" data-action="deleteRow" title="Elimina riga">−↓</button>
+      <button class="icon" data-action="deleteColumn" title="Elimina colonna">−→</button>
+      <button class="icon" data-action="deleteTable" title="Elimina tabella">⊠</button>
     </div>
   `);
-  app.appendChild(fieldsCard);
+  app.appendChild(toolbar);
 
-  const metaCard = el(`
-    <div class="meta-panel" style="margin-bottom:18px">
-      <p class="meta-panel-title">Core properties</p>
-      <div class="meta-grid">
-        <div class="meta-field">
-          <label for="m-cp-author">Author</label>
-          <input type="text" id="m-cp-author" value="${escapeAttr(cp.author || '')}">
-        </div>
-        <div class="meta-field">
-          <label for="m-cp-last-modified-by">Last modified by</label>
-          <input type="text" id="m-cp-last-modified-by" value="${escapeAttr(cp.last_modified_by || '')}">
-        </div>
-        <div class="meta-field">
-          <label for="m-cp-title">Title (meta)</label>
-          <input type="text" id="m-cp-title" value="${escapeAttr(cp.title || '')}">
-        </div>
-        <div class="meta-field">
-          <label for="m-cp-subject">Subject</label>
-          <input type="text" id="m-cp-subject" value="${escapeAttr(cp.subject || '')}">
-        </div>
-        <div class="meta-field">
-          <label for="m-cp-category">Category (meta)</label>
-          <input type="text" id="m-cp-category" value="${escapeAttr(cp.category || '')}">
-        </div>
-        <div class="meta-field">
-          <label for="m-cp-keywords">Keywords</label>
-          <input type="text" id="m-cp-keywords" value="${escapeAttr(cp.keywords || '')}">
-        </div>
-        <div class="meta-field">
-          <label for="m-cp-language">Language</label>
-          <input type="text" id="m-cp-language" value="${escapeAttr(cp.language || '')}">
-        </div>
-        <div class="meta-field">
-          <label>Revisione</label>
-          <div class="meta-readonly">${escapeHtml(String(cp.revision ?? 0))}</div>
-        </div>
-        <div class="meta-field">
-          <label>Creato</label>
-          <div class="meta-readonly">${escapeHtml(cp.created ? new Date(cp.created).toLocaleString('it-IT') : '—')}</div>
-        </div>
-        <div class="meta-field">
-          <label>Modificato</label>
-          <div class="meta-readonly" id="m-modified-display">${escapeHtml(cp.modified ? new Date(cp.modified).toLocaleString('it-IT') : '—')}</div>
-        </div>
-      </div>
-      <div style="margin-top:12px">
-        <label for="m-cp-comments">Commenti</label>
-        <input type="text" id="m-cp-comments" value="${escapeAttr(cp.comments || '')}">
-      </div>
-    </div>
-  `);
-  app.appendChild(metaCard);
+  const editorEl = document.createElement('div');
+  editorEl.className = 'editor-surface';
+  app.appendChild(editorEl);
+
+  editor = new Editor({
+    element: editorEl,
+    extensions: [
+      StarterKit,
+      Underline,
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableHeader,
+      TableCell,
+    ],
+    content: bodyToHtml(doc.body),
+    autofocus: true,
+  });
+
+  toolbar.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const a = btn.dataset.action;
+      const chain = editor.chain().focus();
+      if (a === 'bold')          chain.toggleBold().run();
+      else if (a === 'italic')   chain.toggleItalic().run();
+      else if (a === 'underline') chain.toggleUnderline().run();
+      else if (a === 'h1')       chain.toggleHeading({ level: 1 }).run();
+      else if (a === 'h2')       chain.toggleHeading({ level: 2 }).run();
+      else if (a === 'h3')       chain.toggleHeading({ level: 3 }).run();
+      else if (a === 'p')        chain.setParagraph().run();
+      else if (a === 'ul')       chain.toggleBulletList().run();
+      else if (a === 'ol')       chain.toggleOrderedList().run();
+      else if (a === 'table')    chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
+      else if (a === 'addRowAfter')    chain.addRowAfter().run();
+      else if (a === 'addColumnAfter') chain.addColumnAfter().run();
+      else if (a === 'deleteRow')      chain.deleteRow().run();
+      else if (a === 'deleteColumn')   chain.deleteColumn().run();
+      else if (a === 'deleteTable')    chain.deleteTable().run();
+    });
+  });
+
+  editor.on('selectionUpdate', () => updateToolbar(editor, toolbar));
+  editor.on('transaction',     () => updateToolbar(editor, toolbar));
 
   const saveRow = el(`
     <div class="save-row">
@@ -255,11 +250,14 @@ function renderEditor() {
 
   app.appendChild(el(`
     <footer class="note">
-      Stai modificando un file JSON. I campi body e images vengono preservati intatti; modifica il testo completo nel campo full_text.
+      Slug, titolo, categoria, riepilogo e immagini restano invariati e vengono preservati così come sono nel file.
+      Autore ultima modifica, titolo (meta) e data di modifica si aggiornano automaticamente a ogni salvataggio.
     </footer>
   `));
 
   top.querySelector('#btn-back').addEventListener('click', () => {
+    editor.destroy();
+    editor = null;
     state.current = null;
     state.error = null;
     state.info = null;
@@ -267,41 +265,28 @@ function renderEditor() {
     render();
   });
 
-  document.getElementById('btn-save').addEventListener('click', () => saveFile());
+  document.getElementById('btn-save').addEventListener('click', () => saveFile(editor.getHTML()));
 }
 
-function collectDoc() {
-  const { doc } = state.current;
-  const cp = doc.core_properties || {};
-  const now = new Date().toISOString();
-
-  const newDoc = {
-    ...doc,
-    slug:          document.getElementById('f-slug').value.trim(),
-    title:         document.getElementById('f-title').value.trim(),
-    summary:       document.getElementById('f-summary').value,
-    category:      document.getElementById('f-category').value.trim(),
-    category_name: document.getElementById('f-category-name').value.trim(),
-    full_text:     document.getElementById('f-fulltext').value,
-    core_properties: {
-      ...cp,
-      title:            document.getElementById('m-cp-title').value.trim(),
-      subject:          document.getElementById('m-cp-subject').value.trim(),
-      author:           document.getElementById('m-cp-author').value.trim(),
-      last_modified_by: document.getElementById('m-cp-last-modified-by').value.trim(),
-      modified:         now,
-      category:         document.getElementById('m-cp-category').value.trim(),
-      comments:         document.getElementById('m-cp-comments').value.trim(),
-      keywords:         document.getElementById('m-cp-keywords').value.trim(),
-      language:         document.getElementById('m-cp-language').value.trim(),
-      revision:         (cp.revision ?? 0) + 1,
-    },
+function updateToolbar(editor, toolbar) {
+  const map = {
+    bold:      () => editor.isActive('bold'),
+    italic:    () => editor.isActive('italic'),
+    underline: () => editor.isActive('underline'),
+    h1:        () => editor.isActive('heading', { level: 1 }),
+    h2:        () => editor.isActive('heading', { level: 2 }),
+    h3:        () => editor.isActive('heading', { level: 3 }),
+    p:         () => editor.isActive('paragraph'),
+    ul:        () => editor.isActive('bulletList'),
+    ol:        () => editor.isActive('orderedList'),
   };
-  newDoc.word_count = newDoc.full_text.trim().split(/\s+/).filter(Boolean).length;
-  return newDoc;
+  toolbar.querySelectorAll('button[data-action]').forEach(btn => {
+    const check = map[btn.dataset.action];
+    if (check) btn.classList.toggle('active', check());
+  });
 }
 
-async function saveFile() {
+async function saveFile(htmlContent) {
   state.error = null;
   state.info = null;
 
@@ -316,7 +301,27 @@ async function saveFile() {
   if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
 
   try {
-    const newDoc = collectDoc();
+    const username = await ensureUsername();
+    const { doc } = state.current;
+    const cp = doc.core_properties || {};
+    const now = new Date().toISOString();
+    const body = htmlToBody(htmlContent);
+    const fullText = bodyToPlainText(body);
+
+    const newDoc = {
+      ...doc,
+      body,
+      full_text: fullText,
+      word_count: fullText.trim() ? fullText.trim().split(/\s+/).filter(Boolean).length : 0,
+      core_properties: {
+        ...cp,
+        last_modified_by: username || cp.last_modified_by || '',
+        title: doc.title || cp.title || '',
+        modified: now,
+        revision: (cp.revision ?? 0) + 1,
+      },
+    };
+
     const base64 = jsonToBase64(newDoc);
 
     const folder = state.current.sha
@@ -386,6 +391,7 @@ async function boot() {
     state.config = cfg;
     state.screen = 'list';
     await refreshList(render);
+    ensureUsername();
   } else {
     state.screen = 'setup';
     render();
