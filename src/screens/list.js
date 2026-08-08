@@ -49,7 +49,7 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   const pageHeader = el(`
     <div class="page-header">
       <div>
-        <h1 class="title" style="margin:0 0 4px">File</h1>
+        <h1 class="title" style="margin:0 0 4px">Documenti</h1>
         <p style="font-size:13px;color:var(--muted-foreground);margin:0" id="file-count-label"></p>
       </div>
       <div class="page-header-actions">
