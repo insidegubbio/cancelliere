@@ -14,6 +14,9 @@ export const state = {
 
   currentFolder: null,
 
+  categoriesIndex: null,
+  categoriesPath: null,
+
   searchQuery: '',
 
   searchDirs: [],
