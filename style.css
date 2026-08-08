@@ -193,7 +193,7 @@ button:disabled { opacity: .4; cursor: default; pointer-events: none; }
   transition: background .12s, color .12s;
 }
 .btn-icon:hover { background: var(--muted); color: var(--foreground); }
-.btn-icon.danger:hover { background: color-mix(in srgb, var(--destructive) 12%, transparent); color: var(--destructive); }
+.btn-icon-danger:hover { background: color-mix(in srgb, var(--destructive) 12%, transparent); color: var(--destructive); }
 
 button.secondary {
   display: inline-flex;
@@ -600,3 +600,57 @@ footer.note {
 }
 .breadcrumb-btn:hover { background: var(--muted); color: var(--foreground); }
 .breadcrumb-btn.active { font-weight: 600; color: var(--foreground); }
+
+/* --- rich text editor: toolbar + surface --- */
+button.icon {
+  background: transparent;
+  color: var(--foreground);
+  border: 1.5px solid var(--border);
+  padding: 6px 11px;
+  font-size: 14px;
+  line-height: 1;
+  border-radius: calc(var(--radius) - 4px);
+  cursor: pointer;
+}
+button.icon:hover { background: var(--muted); opacity: 1; }
+button.icon.active { background: var(--secondary); border-color: var(--accent); color: var(--foreground); }
+
+.toolbar {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-bottom: none;
+  background: var(--muted);
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.toolbar .sep { width: 1px; align-self: stretch; background: var(--border); margin: 2px 5px; }
+
+.editor-surface {
+  border: 1.5px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  background: var(--card);
+  min-height: 420px;
+  font-size: 15.5px;
+  line-height: 1.75;
+  font-family: 'Satoshi', system-ui, sans-serif;
+  cursor: text;
+}
+.editor-surface .ProseMirror {
+  min-height: 420px;
+  padding: 36px 44px;
+  outline: none;
+}
+.editor-surface .ProseMirror h1 { font-family: 'Instrument Serif', Georgia, serif; font-size: 30px; margin: .6em 0 .3em; font-weight: 400; }
+.editor-surface .ProseMirror h2 { font-family: 'Instrument Serif', Georgia, serif; font-size: 23px; margin: .6em 0 .3em; font-weight: 400; }
+.editor-surface .ProseMirror h3 { font-size: 17px; margin: .6em 0 .3em; font-weight: 700; }
+.editor-surface .ProseMirror p  { margin: 0 0 .85em; }
+.editor-surface .ProseMirror ul,
+.editor-surface .ProseMirror ol { margin: 0 0 .85em; padding-left: 1.5em; }
+.editor-surface .ProseMirror table { border-collapse: collapse; width: 100%; margin: 0 0 1em; font-size: 14px; }
+.editor-surface .ProseMirror td,
+.editor-surface .ProseMirror th { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; min-width: 60px; }
+.editor-surface .ProseMirror th { background: var(--muted); font-weight: 600; }
+.editor-surface .ProseMirror .selectedCell { background: var(--secondary); }
