@@ -2,12 +2,10 @@ import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
 import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder } from '../api/github.js';
 import { state } from '../state.js';
-import mammoth from 'mammoth';
 
 export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
   app.innerHTML = '';
 
-  // breadcrumb
   const rootFolder    = state.config.folder;
   const currentFolder = state.currentFolder || rootFolder;
   const segments      = currentFolder.split('/');
@@ -44,11 +42,9 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   );
   app.appendChild(top);
 
-  // banners
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
 
-  // search bar
   const searchWrap = el(`
     <div class="search-wrap">
       <span class="search-icon">🔍</span>
@@ -61,7 +57,6 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   }
   app.appendChild(searchWrap);
 
-  // file list card
   const card = el(`<div class="card"></div>`);
   renderListBody(card, render, onOpenFile);
   app.appendChild(card);
@@ -99,8 +94,7 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
 
   app.appendChild(el(`
     <footer class="note">
-      L'editor gestisce testo, titoli (H1–H3), grassetto, corsivo, sottolineato ed elenchi.
-      Tabelle, immagini e formattazioni avanzate presenti nel file originale non vengono conservate se il documento viene salvato da qui.
+      L'editor gestisce file JSON con struttura slug/title/summary/body/core_properties.
     </footer>
   `));
 
@@ -124,7 +118,7 @@ function renderListBody(card, render, onOpenFile) {
   } else if (!dirs.length && !files.length) {
     const msg = searchMode
       ? `Nessun risultato per "${escapeHtml(query)}".`
-      : `Nessun file .docx trovato in questa cartella.`;
+      : `Nessun file .json trovato in questa cartella.`;
     card.appendChild(el(`<div class="empty">${msg}</div>`));
   } else {
     if (searchMode && state.searchTruncated) {
@@ -135,21 +129,15 @@ function renderListBody(card, render, onOpenFile) {
 
     const ul = el(`<ul class="file-list"></ul>`);
 
-    // directories
     dirs.forEach(d => {
       const row = buildDirRow(d, render);
-      if (state.actionBusy) {
-        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
-      }
+      if (state.actionBusy) row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
       ul.appendChild(row);
     });
 
-    // .docx files
     files.forEach(f => {
       const row = buildFileRow(f, render, onOpenFile);
-      if (state.actionBusy) {
-        row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
-      }
+      if (state.actionBusy) row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
       ul.appendChild(row);
     });
 
@@ -157,7 +145,6 @@ function renderListBody(card, render, onOpenFile) {
   }
 }
 
-// search recursive
 let searchSeq = 0;
 let searchDebounceTimer = null;
 
@@ -166,7 +153,7 @@ function scheduleSearch(render, card, onOpenFile) {
 
   const query = (state.searchQuery || '').trim();
   if (!query) {
-    searchSeq++; // invalidate any in-flight search
+    searchSeq++;
     state.searching = false;
     state.searchDirs = [];
     state.searchFiles = [];
@@ -176,7 +163,6 @@ function scheduleSearch(render, card, onOpenFile) {
   }
 
   searchDebounceTimer = setTimeout(() => runSearch(render, card, onOpenFile), 300);
-  // show the spinner right away, even before the debounce fires
   state.searching = true;
   renderListBody(card, render, onOpenFile);
 }
@@ -191,7 +177,7 @@ async function runSearch(render, card, onOpenFile) {
 
   try {
     const { dirs, files, truncated } = await searchFiles(state.config, rootFolder, query);
-    if (seq !== searchSeq) return; // a newer search (or a clear) has since started, discard this one
+    if (seq !== searchSeq) return;
     state.searchDirs = dirs;
     state.searchFiles = files;
     state.searchTruncated = truncated;
@@ -209,11 +195,11 @@ function buildFileRow(f, render, onOpenFile) {
     <li class="file-row" data-path="${escapeAttr(f.path)}">
       <div style="flex:1;min-width:0">
         <div class="file-name" style="display:flex;align-items:center;gap:7px">
-          <span style="font-size:17px;line-height:1;flex-shrink:0">📄</span>
+          <span style="font-size:16px;line-height:1;flex-shrink:0">{ }</span>
           <span class="file-label">${escapeHtml(f.name)}</span>
           <input class="rename-input" type="text" value="${escapeAttr(f.name)}"
             style="display:none;flex:1;font-size:14px;font-family:inherit;padding:4px 8px;
-                   border:1.5px solid var(--accent);border-radius:var(--radius-xs);
+                   border:1.5px solid var(--accent-color);border-radius:var(--radius-xs);
                    background:var(--surface);color:var(--ink);">
         </div>
         <div class="file-path">${escapeHtml(f.path)}</div>
@@ -235,13 +221,13 @@ function buildFileRow(f, render, onOpenFile) {
     </li>
   `);
 
-  const label        = row.querySelector('.file-label');
-  const input        = row.querySelector('.rename-input');
-  const rowActions   = row.querySelector('.row-actions');
+  const label         = row.querySelector('.file-label');
+  const input         = row.querySelector('.rename-input');
+  const rowActions    = row.querySelector('.row-actions');
   const renameActions = row.querySelector('.rename-actions');
   const deleteActions = row.querySelector('.delete-actions');
-  const btnConfirm   = row.querySelector('.btn-rename-confirm');
-  const btnCancel    = row.querySelector('.btn-rename-cancel');
+  const btnConfirm    = row.querySelector('.btn-rename-confirm');
+  const btnCancel     = row.querySelector('.btn-rename-cancel');
 
   row.querySelector('.btn-open').addEventListener('click', () => onOpenFile(f));
 
@@ -287,11 +273,11 @@ function buildDirRow(d, render) {
     <li class="file-row" data-path="${escapeAttr(d.path)}">
       <div style="flex:1;min-width:0">
         <div class="file-name" style="display:flex;align-items:center;gap:7px">
-          <span style="font-size:17px;line-height:1;flex-shrink:0">📁</span>
+          <span style="font-size:16px;line-height:1;flex-shrink:0">📁</span>
           <span class="dir-label">${escapeHtml(d.name)}</span>
           <input class="rename-input" type="text" value="${escapeAttr(d.name)}"
             style="display:none;flex:1;font-size:14px;font-family:inherit;padding:4px 8px;
-                   border:1.5px solid var(--accent);border-radius:var(--radius-xs);
+                   border:1.5px solid var(--accent-color);border-radius:var(--radius-xs);
                    background:var(--surface);color:var(--ink);">
         </div>
       </div>
@@ -306,12 +292,12 @@ function buildDirRow(d, render) {
     </li>
   `);
 
-  const label        = row.querySelector('.dir-label');
-  const input        = row.querySelector('.rename-input');
-  const rowActions   = row.querySelector('.row-actions');
+  const label         = row.querySelector('.dir-label');
+  const input         = row.querySelector('.rename-input');
+  const rowActions    = row.querySelector('.row-actions');
   const renameActions = row.querySelector('.rename-actions');
-  const btnConfirm   = row.querySelector('.btn-rename-confirm');
-  const btnCancel    = row.querySelector('.btn-rename-cancel');
+  const btnConfirm    = row.querySelector('.btn-rename-confirm');
+  const btnCancel     = row.querySelector('.btn-rename-cancel');
 
   row.querySelector('.btn-open-dir').addEventListener('click', () => navigate(d.path, render));
 
@@ -342,7 +328,6 @@ function buildDirRow(d, render) {
   return row;
 }
 
-// actions
 let refreshSeq = 0;
 
 export async function refreshList(render) {
@@ -353,7 +338,7 @@ export async function refreshList(render) {
   render();
   try {
     const { dirs, files } = await listFolder(state.config, state.currentFolder || state.config.folder);
-    if (seq !== refreshSeq) return; // a newer refresh has since started, discard this one
+    if (seq !== refreshSeq) return;
     state.dirs = dirs;
     state.files = files;
   } catch (e) {
@@ -365,7 +350,6 @@ export async function refreshList(render) {
   render();
 }
 
-// parent folder of a path, e.g. "docs/a/b.docx" -> "docs/a"
 export function parentFolderOf(path) {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? '' : path.slice(0, idx);
@@ -374,11 +358,6 @@ export function parentFolderOf(path) {
 function removeFileEverywhere(path) {
   state.files = state.files.filter(x => x.path !== path);
   state.searchFiles = state.searchFiles.filter(x => x.path !== path);
-}
-
-function removeDirEverywhere(path) {
-  state.dirs = state.dirs.filter(x => x.path !== path);
-  state.searchDirs = state.searchDirs.filter(x => x.path !== path);
 }
 
 function replaceFileEverywhere(oldPath, updatedFile) {
@@ -420,7 +399,7 @@ function navigate(path, render) {
 async function renameFile(file, newName, rowEl, render) {
   if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
 
-  const finalName = newName.toLowerCase().endsWith('.docx') ? newName : newName + '.docx';
+  const finalName = newName.toLowerCase().endsWith('.json') ? newName : newName + '.json';
   if (finalName === file.name) {
     rowEl.querySelector('.file-label').style.display = '';
     rowEl.querySelector('.rename-input').style.display = 'none';
@@ -429,10 +408,8 @@ async function renameFile(file, newName, rowEl, render) {
     return;
   }
 
-  if (state.actionBusy) return; // an operation is already running elsewhere in the list
+  if (state.actionBusy) return;
 
-  // the file's own parent folder, not necessarily the folder currently being
-  // browsed (a rename can be triggered from a recursive search result)
   const folder  = parentFolderOf(file.path);
   const newPath = `${folder}/${finalName}`;
 
@@ -442,10 +419,7 @@ async function renameFile(file, newName, rowEl, render) {
   render();
 
   try {
-    // a rename doesn't change the file's bytes, so reuse the blob sha
     await renameFileAtomic(state.config, file.path, newPath, file.sha, `chore: rinomina "${file.name}" in "${finalName}"`);
-
-    // update the lists in place rather than re-fetching them from github
     replaceFileEverywhere(file.path, { ...file, name: finalName, path: newPath });
     state.info = `"${file.name}" rinominato in "${finalName}".`;
   } catch (e) {
@@ -465,7 +439,6 @@ async function deleteFileAction(file, rowEl, render) {
 
   try {
     await deleteFile(state.config, file.path, file.sha, `chore: elimina "${file.name}"`);
-
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
   } catch (e) {
@@ -497,7 +470,6 @@ async function renameFolder(dir, newName, rowEl, render) {
 
   try {
     await renameFolderAtomic(state.config, dir.path, newPath, `chore: rinomina cartella "${dir.name}" in "${newName}"`);
-
     replaceDirEverywhere(dir.path, { ...dir, name: newName, path: newPath });
     state.info = `Cartella "${dir.name}" rinominata in "${newName}".`;
   } catch (e) {
