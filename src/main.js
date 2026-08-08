@@ -4,16 +4,49 @@ import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, createFolder } from './api/github.js';
-import { buildDocx } from './docx/builder.js';
+import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder } from './api/github.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
-import mammoth from 'mammoth';
-import { Editor } from '@tiptap/core';
-import StarterKit from '@tiptap/starter-kit';
-import { Underline } from '@tiptap/extension-underline';
-import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 
 const app = document.getElementById('app');
+
+function emptyJsonDoc(slug, category) {
+  const now = new Date().toISOString();
+  return {
+    slug: slug || '',
+    title: '',
+    summary: '',
+    category: category || '',
+    word_count: 0,
+    category_name: '',
+    full_text: '',
+    body: [],
+    images: [],
+    core_properties: {
+      title: '',
+      subject: '',
+      author: '',
+      last_modified_by: '',
+      created: now,
+      modified: now,
+      category: '',
+      comments: '',
+      keywords: '',
+      language: '',
+      revision: 0,
+    },
+  };
+}
+
+function jsonToBase64(obj) {
+  const str = JSON.stringify(obj, null, 2);
+  const bytes = new TextEncoder().encode(str);
+  return bytesToBase64(bytes);
+}
+
+function bytesToJson(bytes) {
+  const str = new TextDecoder().decode(bytes);
+  return JSON.parse(str);
+}
 
 function render() {
   if (state.screen === 'setup') {
@@ -28,11 +61,9 @@ function render() {
     renderEditor();
     return;
   }
-  // loading
   app.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--ink-soft)"><span class="spinner"></span></div>';
 }
 
-//  callbacks
 async function onConnect(cfg) {
   state.config = cfg;
   state.error = null;
@@ -47,7 +78,6 @@ function onSettings() {
   render();
 }
 
-// open file
 async function onOpenFile(file) {
   state.busy = true;
   state.error = null;
@@ -56,18 +86,8 @@ async function onOpenFile(file) {
 
   try {
     const { bytes, sha } = await fetchFile(state.config, file.path);
-    const result = await mammoth.convertToHtml(
-      { arrayBuffer: bytes.buffer },
-      { convertImage: mammoth.images.imgElement(image => {
-          return image.read('base64').then(data => ({
-            src: `data:${image.contentType};base64,${data}`,
-          }));
-        })
-      }
-    );
-    // images lost sadly
-    const hasImages = result.value.includes('<img');
-    state.current = { file, sha, html: result.value, hasImages };
+    const doc = bytesToJson(bytes);
+    state.current = { file, sha, doc };
     state.busy = false;
     state.screen = 'editor';
     render();
@@ -78,22 +98,22 @@ async function onOpenFile(file) {
   }
 }
 
-// new file
 function onNewFile() {
-  const name = prompt('Nome del nuovo documento (senza estensione):');
+  const name = prompt('Nome del nuovo file JSON (senza estensione):');
   if (!name || !name.trim()) return;
-  const finalName = name.trim().toLowerCase().endsWith('.docx') ? name.trim() : name.trim() + '.docx';
+  const slug = name.trim().toLowerCase().replace(/\s+/g, '-');
+  const finalName = slug.endsWith('.json') ? slug : slug + '.json';
   const folder = state.currentFolder || state.config.folder;
+  const category = folder.split('/').pop();
   state.current = {
     file: { name: finalName, path: `${folder}/${finalName}` },
     sha: null,
-    html: '<p></p>',
+    doc: emptyJsonDoc(slug.replace('.json', ''), category),
   };
   state.screen = 'editor';
   render();
 }
 
-// new folder
 async function onNewFolder() {
   const name = prompt('Nome della nuova cartella:');
   if (!name || !name.trim()) return;
@@ -119,16 +139,14 @@ async function onNewFolder() {
   render();
 }
 
-// editor screen
 function renderEditor() {
-  const { file, html } = state.current;
+  const { file, doc } = state.current;
   app.innerHTML = '';
 
-  // header
   const top = el(`
     <div class="editor-header">
       <div>
-        <p class="eyebrow" style="margin-bottom:2px">${escapeHtml(state.config.folder)}/</p>
+        <p class="eyebrow" style="margin-bottom:4px">${escapeHtml(state.config.folder)}/</p>
         <input class="filename-edit" id="f-filename" type="text" value="${escapeAttr(file.name)}">
       </div>
       <button class="secondary" id="btn-back">&larr; Torna all'elenco</button>
@@ -138,81 +156,95 @@ function renderEditor() {
 
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
-  if (state.current?.hasImages) app.appendChild(el(`<div class="banner warn">⚠️ Questo documento contiene immagini che non verranno conservate al salvataggio.</div>`));
 
-  // toolbar
-  const toolbar = el(`
-    <div class="toolbar">
-      <button class="icon" data-action="bold" title="Grassetto"><b>B</b></button>
-      <button class="icon" data-action="italic" title="Corsivo"><i>I</i></button>
-      <button class="icon" data-action="underline" title="Sottolineato"><u>U</u></button>
-      <div class="sep"></div>
-      <button class="icon" data-action="h1" title="Titolo 1">H1</button>
-      <button class="icon" data-action="h2" title="Titolo 2">H2</button>
-      <button class="icon" data-action="h3" title="Titolo 3">H3</button>
-      <button class="icon" data-action="p" title="Paragrafo">P</button>
-      <div class="sep"></div>
-      <button class="icon" data-action="ul" title="Elenco puntato">&bull; &bull;</button>
-      <button class="icon" data-action="ol" title="Elenco numerato">1.2.</button>
-      <div class="sep"></div>
-      <button class="icon" data-action="table" title="Inserisci tabella">⊞</button>
-      <button class="icon" data-action="addRowAfter" title="Aggiungi riga">+↓</button>
-      <button class="icon" data-action="addColumnAfter" title="Aggiungi colonna">+→</button>
-      <button class="icon" data-action="deleteRow" title="Elimina riga">−↓</button>
-      <button class="icon" data-action="deleteColumn" title="Elimina colonna">−→</button>
-      <button class="icon" data-action="deleteTable" title="Elimina tabella">⊠</button>
+  const cp = doc.core_properties || {};
+
+  const fieldsCard = el(`
+    <div style="background:var(--surface);border:1px solid var(--rule);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow);margin-bottom:18px">
+      <p class="meta-panel-title">Campi principali</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 18px">
+        <div>
+          <label for="f-slug">Slug</label>
+          <input type="text" id="f-slug" value="${escapeAttr(doc.slug || '')}">
+        </div>
+        <div>
+          <label for="f-title">Titolo</label>
+          <input type="text" id="f-title" value="${escapeAttr(doc.title || '')}">
+        </div>
+        <div>
+          <label for="f-category">Category (slug)</label>
+          <input type="text" id="f-category" value="${escapeAttr(doc.category || '')}">
+        </div>
+        <div>
+          <label for="f-category-name">Category name</label>
+          <input type="text" id="f-category-name" value="${escapeAttr(doc.category_name || '')}">
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <label for="f-summary">Summary</label>
+        <textarea id="f-summary" rows="3" style="width:100%;padding:10px 13px;border:1.5px solid var(--rule);border-radius:var(--radius-xs);background:var(--surface);font-family:inherit;font-size:14px;color:var(--ink);resize:vertical;line-height:1.6">${escapeHtml(doc.summary || '')}</textarea>
+      </div>
+      <div style="margin-top:12px">
+        <label for="f-fulltext">Testo completo (full_text)</label>
+        <textarea id="f-fulltext" rows="10" style="width:100%;padding:10px 13px;border:1.5px solid var(--rule);border-radius:var(--radius-xs);background:var(--surface);font-family:inherit;font-size:14px;color:var(--ink);resize:vertical;line-height:1.6">${escapeHtml(doc.full_text || '')}</textarea>
+      </div>
     </div>
   `);
-  app.appendChild(toolbar);
+  app.appendChild(fieldsCard);
 
-  // editor container
-  const editorEl = document.createElement('div');
-  editorEl.className = 'editor-surface';
-  app.appendChild(editorEl);
+  const metaCard = el(`
+    <div class="meta-panel" style="margin-bottom:18px">
+      <p class="meta-panel-title">Core properties</p>
+      <div class="meta-grid">
+        <div class="meta-field">
+          <label for="m-cp-author">Author</label>
+          <input type="text" id="m-cp-author" value="${escapeAttr(cp.author || '')}">
+        </div>
+        <div class="meta-field">
+          <label for="m-cp-last-modified-by">Last modified by</label>
+          <input type="text" id="m-cp-last-modified-by" value="${escapeAttr(cp.last_modified_by || '')}">
+        </div>
+        <div class="meta-field">
+          <label for="m-cp-title">Title (meta)</label>
+          <input type="text" id="m-cp-title" value="${escapeAttr(cp.title || '')}">
+        </div>
+        <div class="meta-field">
+          <label for="m-cp-subject">Subject</label>
+          <input type="text" id="m-cp-subject" value="${escapeAttr(cp.subject || '')}">
+        </div>
+        <div class="meta-field">
+          <label for="m-cp-category">Category (meta)</label>
+          <input type="text" id="m-cp-category" value="${escapeAttr(cp.category || '')}">
+        </div>
+        <div class="meta-field">
+          <label for="m-cp-keywords">Keywords</label>
+          <input type="text" id="m-cp-keywords" value="${escapeAttr(cp.keywords || '')}">
+        </div>
+        <div class="meta-field">
+          <label for="m-cp-language">Language</label>
+          <input type="text" id="m-cp-language" value="${escapeAttr(cp.language || '')}">
+        </div>
+        <div class="meta-field">
+          <label>Revisione</label>
+          <div class="meta-readonly">${escapeHtml(String(cp.revision ?? 0))}</div>
+        </div>
+        <div class="meta-field">
+          <label>Creato</label>
+          <div class="meta-readonly">${escapeHtml(cp.created ? new Date(cp.created).toLocaleString('it-IT') : '—')}</div>
+        </div>
+        <div class="meta-field">
+          <label>Modificato</label>
+          <div class="meta-readonly" id="m-modified-display">${escapeHtml(cp.modified ? new Date(cp.modified).toLocaleString('it-IT') : '—')}</div>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <label for="m-cp-comments">Commenti</label>
+        <input type="text" id="m-cp-comments" value="${escapeAttr(cp.comments || '')}">
+      </div>
+    </div>
+  `);
+  app.appendChild(metaCard);
 
-  // init Tiptap
-  const editor = new Editor({
-    element: editorEl,
-    extensions: [
-      StarterKit,
-      Underline,
-      Table.configure({ resizable: false }),
-      TableRow,
-      TableHeader,
-      TableCell,
-    ],
-    content: html,
-    autofocus: true,
-  });
-
-  // toolbar actions
-  toolbar.querySelectorAll('button[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const a = btn.dataset.action;
-      const chain = editor.chain().focus();
-      if (a === 'bold')          chain.toggleBold().run();
-      else if (a === 'italic')   chain.toggleItalic().run();
-      else if (a === 'underline') chain.toggleUnderline().run();
-      else if (a === 'h1')       chain.toggleHeading({ level: 1 }).run();
-      else if (a === 'h2')       chain.toggleHeading({ level: 2 }).run();
-      else if (a === 'h3')       chain.toggleHeading({ level: 3 }).run();
-      else if (a === 'p')        chain.setParagraph().run();
-      else if (a === 'ul')       chain.toggleBulletList().run();
-      else if (a === 'ol')       chain.toggleOrderedList().run();
-      else if (a === 'table')    chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
-      else if (a === 'addRowAfter')    chain.addRowAfter().run();
-      else if (a === 'addColumnAfter') chain.addColumnAfter().run();
-      else if (a === 'deleteRow')      chain.deleteRow().run();
-      else if (a === 'deleteColumn')   chain.deleteColumn().run();
-      else if (a === 'deleteTable')    chain.deleteTable().run();
-    });
-  });
-
-  // update toolbar active states
-  editor.on('selectionUpdate', () => updateToolbar(editor, toolbar));
-  editor.on('transaction',     () => updateToolbar(editor, toolbar));
-
-  // save row
   const saveRow = el(`
     <div class="save-row">
       <input class="commit-msg" id="f-commit" type="text" placeholder="Messaggio di commit (opzionale)">
@@ -223,13 +255,11 @@ function renderEditor() {
 
   app.appendChild(el(`
     <footer class="note">
-      L'editor gestisce testo, titoli (H1–H3), grassetto, corsivo, sottolineato, elenchi e tabelle.
-      Le immagini non vengono conservate al salvataggio.
+      Stai modificando un file JSON. I campi body e images vengono preservati intatti; modifica il testo completo nel campo full_text.
     </footer>
   `));
 
   top.querySelector('#btn-back').addEventListener('click', () => {
-    editor.destroy();
     state.current = null;
     state.error = null;
     state.info = null;
@@ -237,37 +267,47 @@ function renderEditor() {
     render();
   });
 
-  document.getElementById('btn-save').addEventListener('click', () => {
-    // pass the editor html to savefile instead of a dom surface
-    saveFile(editor.getHTML());
-  });
+  document.getElementById('btn-save').addEventListener('click', () => saveFile());
 }
 
-function updateToolbar(editor, toolbar) {
-  const map = {
-    bold:      () => editor.isActive('bold'),
-    italic:    () => editor.isActive('italic'),
-    underline: () => editor.isActive('underline'),
-    h1:        () => editor.isActive('heading', { level: 1 }),
-    h2:        () => editor.isActive('heading', { level: 2 }),
-    h3:        () => editor.isActive('heading', { level: 3 }),
-    p:         () => editor.isActive('paragraph'),
-    ul:        () => editor.isActive('bulletList'),
-    ol:        () => editor.isActive('orderedList'),
+function collectDoc() {
+  const { doc } = state.current;
+  const cp = doc.core_properties || {};
+  const now = new Date().toISOString();
+
+  const newDoc = {
+    ...doc,
+    slug:          document.getElementById('f-slug').value.trim(),
+    title:         document.getElementById('f-title').value.trim(),
+    summary:       document.getElementById('f-summary').value,
+    category:      document.getElementById('f-category').value.trim(),
+    category_name: document.getElementById('f-category-name').value.trim(),
+    full_text:     document.getElementById('f-fulltext').value,
+    core_properties: {
+      ...cp,
+      title:            document.getElementById('m-cp-title').value.trim(),
+      subject:          document.getElementById('m-cp-subject').value.trim(),
+      author:           document.getElementById('m-cp-author').value.trim(),
+      last_modified_by: document.getElementById('m-cp-last-modified-by').value.trim(),
+      modified:         now,
+      category:         document.getElementById('m-cp-category').value.trim(),
+      comments:         document.getElementById('m-cp-comments').value.trim(),
+      keywords:         document.getElementById('m-cp-keywords').value.trim(),
+      language:         document.getElementById('m-cp-language').value.trim(),
+      revision:         (cp.revision ?? 0) + 1,
+    },
   };
-  toolbar.querySelectorAll('button[data-action]').forEach(btn => {
-    const check = map[btn.dataset.action];
-    if (check) btn.classList.toggle('active', check());
-  });
+  newDoc.word_count = newDoc.full_text.trim().split(/\s+/).filter(Boolean).length;
+  return newDoc;
 }
 
-async function saveFile(htmlContent) {
+async function saveFile() {
   state.error = null;
   state.info = null;
 
   const newName = document.getElementById('f-filename').value.trim();
   if (!newName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
-  const finalName = newName.toLowerCase().endsWith('.docx') ? newName : newName + '.docx';
+  const finalName = newName.toLowerCase().endsWith('.json') ? newName : newName + '.json';
 
   const commitMsgInput = document.getElementById('f-commit').value.trim();
   const message = commitMsgInput || `chore: update "${finalName}"`;
@@ -276,8 +316,8 @@ async function saveFile(htmlContent) {
   if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
 
   try {
-    const bytes = await buildDocx(htmlContent);
-    const base64 = bytesToBase64(bytes);
+    const newDoc = collectDoc();
+    const base64 = jsonToBase64(newDoc);
 
     const folder = state.current.sha
       ? parentFolderOf(state.current.file.path)
@@ -287,12 +327,10 @@ async function saveFile(htmlContent) {
 
     if (renaming) {
       if (state.current.sha) {
-        // existing file so rename + save content in one commit.
         const commitMsg = commitMsgInput || `chore: rinomina "${state.current.file.name}" in "${finalName}"`;
         const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
         state.current.sha = newSha;
       } else {
-        // brand new, unsaved file so just create it.
         const createRes = await putFile(state.config, newPath, base64, message, null);
         state.current.sha = createRes?.content?.sha ?? null;
       }
@@ -301,6 +339,8 @@ async function saveFile(htmlContent) {
       const res = await putFile(state.config, newPath, base64, message, state.current.sha);
       state.current.sha = res?.content?.sha ?? state.current.sha;
     }
+
+    state.current.doc = newDoc;
     state.info = `"${finalName}" salvato con successo.`;
   } catch (e) {
     state.error = `Salvataggio non riuscito: ${e.message}`;
@@ -309,8 +349,6 @@ async function saveFile(htmlContent) {
   render();
 }
 
-
-// boot
 async function boot() {
   const theme = await loadTheme();
   await applyTheme(theme);
