@@ -13,6 +13,13 @@ function encodePath(path) {
   return path.split('/').map(encodeURIComponent).join('/');
 }
 
+function isJsonLikeName(name) {
+  const lower = name.toLowerCase();
+  if (lower.endsWith('.json')) return true;
+  const base = name.replace(/^\.+/, '');
+  return base.length > 0 && !base.includes('.');
+}
+
 function errorMessage(status, body) {
   const msg = body?.message ?? '';
   if (status === 401) return 'Token non valido o scaduto. Controlla il Personal Access Token.';
@@ -47,7 +54,7 @@ export async function listFolder(cfg, folderPath) {
   const list = Array.isArray(data) ? data : [];
   return {
     dirs:  list.filter(f => f.type === 'dir').sort((a, b) => a.name.localeCompare(b.name)),
-    files: list.filter(f => f.type === 'file' && f.name.toLowerCase().endsWith('.json'))
+    files: list.filter(f => f.type === 'file' && isJsonLikeName(f.name))
                .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
@@ -199,7 +206,7 @@ export async function searchFiles(cfg, rootFolder, query) {
 
     if (entry.type === 'tree') {
       dirs.push({ name, path: entry.path });
-    } else if (entry.type === 'blob' && name.toLowerCase().endsWith('.json')) {
+    } else if (entry.type === 'blob' && isJsonLikeName(name)) {
       files.push({ name, path: entry.path, sha: entry.sha });
     }
   });
