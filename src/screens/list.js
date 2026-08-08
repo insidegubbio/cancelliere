@@ -12,23 +12,11 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   const rootIdx       = segments.indexOf(rootFolder.split('/').pop());
   const crumbSegments = segments.slice(rootIdx >= 0 ? rootIdx : 0);
 
-  let breadcrumbHtml = '';
-  crumbSegments.forEach((seg, i) => {
-    const isLast = i === crumbSegments.length - 1;
-    if (isLast) {
-      breadcrumbHtml += `<span style="color:var(--ink);font-weight:600">${escapeHtml(seg)}</span>`;
-    } else {
-      const pathUpTo = segments.slice(0, (rootIdx >= 0 ? rootIdx : 0) + i + 1).join('/');
-      breadcrumbHtml += `<button class="link-btn breadcrumb-nav" data-path="${escapeAttr(pathUpTo)}" style="font-size:13px">${escapeHtml(seg)}</button>`;
-      breadcrumbHtml += `<span style="color:var(--ink-soft);margin:0 4px">/</span>`;
-    }
-  });
-
   const top = el(`
     <div class="topbar">
       <div>
         <p class="eyebrow">${escapeHtml(state.config.owner)}/${escapeHtml(state.config.repo)} &middot; ${escapeHtml(state.config.branch)}</p>
-        <div style="display:flex;align-items:baseline;gap:4px;flex-wrap:wrap">${breadcrumbHtml}</div>
+        <div id="breadcrumb-slot" class="breadcrumb"></div>
       </div>
       <div class="topbar-actions">
         <span id="theme-slot"></span>
@@ -36,30 +24,65 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
       </div>
     </div>
   `);
+
   top.querySelector('#theme-slot').replaceWith(themeToggleBtn(render));
-  top.querySelectorAll('.breadcrumb-nav').forEach(btn =>
-    btn.addEventListener('click', () => navigate(btn.dataset.path, render))
-  );
+
+  const bc = top.querySelector('#breadcrumb-slot');
+  crumbSegments.forEach((seg, i) => {
+    const isLast = i === crumbSegments.length - 1;
+    if (!isLast) {
+      const pathUpTo = segments.slice(0, (rootIdx >= 0 ? rootIdx : 0) + i + 1).join('/');
+      const btn = el(`<button class="breadcrumb-btn" data-path="${escapeAttr(pathUpTo)}">${escapeHtml(seg)}</button>`);
+      btn.addEventListener('click', () => navigate(btn.dataset.path, render));
+      bc.appendChild(btn);
+      bc.appendChild(el(`<span class="breadcrumb-sep">/</span>`));
+    } else {
+      bc.appendChild(el(`<span class="breadcrumb-btn active">${escapeHtml(seg)}</span>`));
+    }
+  });
+
   app.appendChild(top);
 
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
 
+  const pageHeader = el(`
+    <div class="page-header">
+      <div>
+        <h1 class="title" style="margin:0 0 4px">File</h1>
+        <p style="font-size:13px;color:var(--muted-foreground);margin:0" id="file-count-label"></p>
+      </div>
+      <div class="page-header-actions">
+        <button class="btn-outline" id="btn-new-folder">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+          <span class="hide-xs">Nuova cartella</span>
+        </button>
+        <button class="btn-primary" id="btn-new">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Nuovo documento
+        </button>
+      </div>
+    </div>
+  `);
+  app.appendChild(pageHeader);
+
   const searchWrap = el(`
     <div class="search-wrap">
-      <span class="search-icon">🔍</span>
+      <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input type="text" id="f-search" class="search-input" placeholder="Cerca per nome…" value="${escapeAttr(state.searchQuery || '')}" autocomplete="off">
       <button class="link-btn search-clear" id="btn-search-clear" style="display:${state.searchQuery ? '' : 'none'}">Cancella</button>
     </div>
   `);
-  if (state.busy) {
-    searchWrap.querySelectorAll('input, button').forEach(elm => elm.disabled = true);
-  }
+  if (state.busy) searchWrap.querySelectorAll('input,button').forEach(e => e.disabled = true);
   app.appendChild(searchWrap);
 
-  const card = el(`<div class="card"></div>`);
+  const card = el(`<div class="file-card"></div>`);
   renderListBody(card, render, onOpenFile);
   app.appendChild(card);
+
+  const countLabel = pageHeader.querySelector('#file-count-label');
+  const total = (state.files || []).length + (state.dirs || []).length;
+  countLabel.textContent = state.busy ? 'Caricamento…' : `${total} element${total === 1 ? 'o' : 'i'}${currentFolder !== rootFolder ? ' in questa cartella' : ''}`;
 
   const searchInput = searchWrap.querySelector('#f-search');
   const searchClear = searchWrap.querySelector('#btn-search-clear');
@@ -80,28 +103,24 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
     searchInput.focus();
   });
 
-  const actions = el(`
-    <div class="actions">
-      <button class="secondary" id="btn-refresh">Aggiorna elenco</button>
-      <button class="secondary" id="btn-new-folder">📁 Nuova cartella</button>
-      <button class="secondary" id="btn-new">Nuovo documento</button>
+  const actionsBar = el(`
+    <div class="actions-bar">
+      <button class="btn-ghost" id="btn-refresh">
+        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0018.49 15"/></svg>
+        Aggiorna
+      </button>
     </div>
   `);
-  if (state.actionBusy) {
-    actions.querySelectorAll('button').forEach(b => b.disabled = true);
-  }
-  app.appendChild(actions);
+  if (state.actionBusy) actionsBar.querySelectorAll('button').forEach(b => b.disabled = true);
+  app.appendChild(actionsBar);
 
-  app.appendChild(el(`
-    <footer class="note">
-      L'editor gestisce file JSON con struttura slug/title/summary/body/core_properties.
-    </footer>
-  `));
+  app.appendChild(el(`<footer class="note">I file sono salvati come slug senza estensione nel repository GitHub.</footer>`));
 
   top.querySelector('#btn-settings').addEventListener('click', onSettings);
-  document.getElementById('btn-refresh').addEventListener('click', () => refreshList(render));
-  document.getElementById('btn-new-folder').addEventListener('click', onNewFolder);
-  document.getElementById('btn-new').addEventListener('click', onNewFile);
+  pageHeader.querySelector('#btn-refresh') || actionsBar.querySelector('#btn-refresh');
+  actionsBar.querySelector('#btn-refresh').addEventListener('click', () => refreshList(render));
+  pageHeader.querySelector('#btn-new-folder').addEventListener('click', onNewFolder);
+  pageHeader.querySelector('#btn-new').addEventListener('click', onNewFile);
 }
 
 function renderListBody(card, render, onOpenFile) {
@@ -115,34 +134,33 @@ function renderListBody(card, render, onOpenFile) {
   if (state.busy || (searchMode && state.searching)) {
     const label = searchMode ? 'Cerco in tutte le sottocartelle…' : 'Carico i file dal repository…';
     card.appendChild(el(`<div class="empty"><span class="spinner"></span>${label}</div>`));
-  } else if (!dirs.length && !files.length) {
-    const msg = searchMode
-      ? `Nessun risultato per "${escapeHtml(query)}".`
-      : `Nessun file .json trovato in questa cartella.`;
-    card.appendChild(el(`<div class="empty">${msg}</div>`));
-  } else {
-    if (searchMode && state.searchTruncated) {
-      card.appendChild(el(`
-        <div class="banner error">Il repository è troppo grande: la ricerca potrebbe non coprire tutti i file.</div>
-      `));
-    }
-
-    const ul = el(`<ul class="file-list"></ul>`);
-
-    dirs.forEach(d => {
-      const row = buildDirRow(d, render);
-      if (state.actionBusy) row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
-      ul.appendChild(row);
-    });
-
-    files.forEach(f => {
-      const row = buildFileRow(f, render, onOpenFile);
-      if (state.actionBusy) row.querySelectorAll('button, input').forEach(elm => elm.disabled = true);
-      ul.appendChild(row);
-    });
-
-    card.appendChild(ul);
+    return;
   }
+
+  if (!dirs.length && !files.length) {
+    const msg = searchMode
+      ? `Nessun risultato per &ldquo;${escapeHtml(query)}&rdquo;.`
+      : `Nessun file trovato in questa cartella.`;
+    card.appendChild(el(`<div class="empty">${msg}</div>`));
+    return;
+  }
+
+  if (searchMode && state.searchTruncated) {
+    card.appendChild(el(`<div class="banner error" style="margin:12px 16px 0">Il repository è troppo grande: la ricerca potrebbe non coprire tutti i file.</div>`));
+  }
+
+  const ul = el(`<ul class="file-list"></ul>`);
+  dirs.forEach(d => {
+    const row = buildDirRow(d, render, onOpenFile);
+    if (state.actionBusy) row.querySelectorAll('button,input').forEach(e => e.disabled = true);
+    ul.appendChild(row);
+  });
+  files.forEach(f => {
+    const row = buildFileRow(f, render, onOpenFile);
+    if (state.actionBusy) row.querySelectorAll('button,input').forEach(e => e.disabled = true);
+    ul.appendChild(row);
+  });
+  card.appendChild(ul);
 }
 
 let searchSeq = 0;
@@ -150,7 +168,6 @@ let searchDebounceTimer = null;
 
 function scheduleSearch(render, card, onOpenFile) {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-
   const query = (state.searchQuery || '').trim();
   if (!query) {
     searchSeq++;
@@ -161,7 +178,6 @@ function scheduleSearch(render, card, onOpenFile) {
     renderListBody(card, render, onOpenFile);
     return;
   }
-
   searchDebounceTimer = setTimeout(() => runSearch(render, card, onOpenFile), 300);
   state.searching = true;
   renderListBody(card, render, onOpenFile);
@@ -171,10 +187,8 @@ async function runSearch(render, card, onOpenFile) {
   const seq = ++searchSeq;
   const query = (state.searchQuery || '').trim();
   const rootFolder = state.currentFolder || state.config.folder;
-
   state.searching = true;
   renderListBody(card, render, onOpenFile);
-
   try {
     const { dirs, files, truncated } = await searchFiles(state.config, rootFolder, query);
     if (seq !== searchSeq) return;
@@ -190,142 +204,200 @@ async function runSearch(render, card, onOpenFile) {
   renderListBody(card, render, onOpenFile);
 }
 
+function iconSvg(name) {
+  const icons = {
+    pencil: `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+    move:   `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><polyline points="9 12 12 15 15 12"/><line x1="12" y1="9" x2="12" y2="15"/></svg>`,
+    trash:  `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`,
+    folder: `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+    doc:    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>`,
+    chevron:`<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
+  };
+  return icons[name] || '';
+}
+
 function buildFileRow(f, render, onOpenFile) {
-  const row = el(`
-    <li class="file-row" data-path="${escapeAttr(f.path)}">
-      <div style="flex:1;min-width:0">
-        <div class="file-name" style="display:flex;align-items:center;gap:7px">
-          <span style="font-size:16px;line-height:1;flex-shrink:0">{ }</span>
-          <span class="file-label">${escapeHtml(f.name)}</span>
-          <input class="rename-input" type="text" value="${escapeAttr(f.name)}"
-            style="display:none;flex:1;font-size:14px;font-family:inherit;padding:4px 8px;
-                   border:1.5px solid var(--accent-color);border-radius:var(--radius-xs);
-                   background:var(--surface);color:var(--ink);">
-        </div>
-        <div class="file-path">${escapeHtml(f.path)}</div>
-      </div>
-      <div class="row-actions" style="display:flex;gap:6px;flex-shrink:0">
-        <button class="secondary btn-rename" title="Rinomina">✏️</button>
-        <button class="secondary btn-delete" title="Elimina">🗑️</button>
-        <button class="secondary btn-open">Apri</button>
-      </div>
-      <div class="rename-actions" style="display:none;gap:6px;flex-shrink:0">
-        <button class="btn-rename-confirm">✓ Rinomina</button>
-        <button class="secondary btn-rename-cancel">Annulla</button>
-      </div>
-      <div class="delete-actions" style="display:none;gap:6px;flex-shrink:0;align-items:center">
-        <span style="font-size:13px;color:var(--danger)">Eliminare definitivamente?</span>
-        <button class="danger btn-delete-confirm">Elimina</button>
-        <button class="secondary btn-delete-cancel">Annulla</button>
-      </div>
-    </li>
+  const row = document.createElement('li');
+  row.className = 'file-row';
+  row.dataset.path = f.path;
+
+  const icon = el(`<span class="file-row-icon" style="color:var(--muted-foreground)">${iconSvg('doc')}</span>`);
+  const body = el(`
+    <div class="file-row-body">
+      <div class="file-row-name" id="label-${escapeAttr(f.path)}">${escapeHtml(f.name)}</div>
+      <div class="file-row-path">${escapeHtml(f.path)}</div>
+    </div>
   `);
 
-  const label         = row.querySelector('.file-label');
-  const input         = row.querySelector('.rename-input');
-  const rowActions    = row.querySelector('.row-actions');
-  const renameActions = row.querySelector('.rename-actions');
-  const deleteActions = row.querySelector('.delete-actions');
-  const btnConfirm    = row.querySelector('.btn-rename-confirm');
-  const btnCancel     = row.querySelector('.btn-rename-cancel');
+  const actions = el(`
+    <div class="file-row-actions">
+      <button class="btn-icon btn-rename" title="Rinomina">${iconSvg('pencil')}</button>
+      <button class="btn-icon btn-move" title="Sposta">${iconSvg('move')}</button>
+      <button class="btn-icon danger btn-delete" title="Elimina">${iconSvg('trash')}</button>
+    </div>
+  `);
 
-  row.querySelector('.btn-open').addEventListener('click', () => onOpenFile(f));
+  const openBtn = el(`<button class="btn-outline btn-open" style="padding:6px 14px;font-size:13px;flex-shrink:0">Apri</button>`);
 
-  row.querySelector('.btn-rename').addEventListener('click', () => {
-    label.style.display = 'none';
-    input.style.display = '';
-    rowActions.style.display = 'none';
-    renameActions.style.display = 'flex';
-    input.focus();
-    input.select();
-  });
+  row.appendChild(icon);
+  row.appendChild(body);
+  row.appendChild(actions);
+  row.appendChild(openBtn);
 
-  const cancelRename = () => {
-    input.value = f.name;
-    label.style.display = '';
-    input.style.display = 'none';
-    rowActions.style.display = 'flex';
-    renameActions.style.display = 'none';
+  openBtn.addEventListener('click', () => onOpenFile(f));
+
+  let mode = 'idle';
+
+  const setMode = (m) => {
+    mode = m;
+    actions.style.display = m === 'idle' ? '' : 'none';
+    openBtn.style.display = m === 'idle' ? '' : 'none';
+
+    row.querySelectorAll('.inline-rename, .inline-delete, .inline-move').forEach(e => e.remove());
+
+    if (m === 'rename') {
+      const wrap = el(`
+        <div class="inline-rename rename-input-wrap">
+          <input class="rename-input" type="text" value="${escapeAttr(f.name)}" spellcheck="false">
+          <button class="btn-outline" style="padding:5px 12px;font-size:13px">✓</button>
+          <button class="btn-ghost" style="padding:5px 10px;font-size:13px">✕</button>
+        </div>
+      `);
+      row.appendChild(wrap);
+      const input = wrap.querySelector('input');
+      const ok = wrap.querySelectorAll('button')[0];
+      const cancel = wrap.querySelectorAll('button')[1];
+      input.focus(); input.select();
+      ok.addEventListener('click', () => renameFile(f, input.value.trim(), row, render));
+      cancel.addEventListener('click', () => setMode('idle'));
+      input.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); if (e.key === 'Escape') cancel.click(); });
+    }
+
+    if (m === 'delete') {
+      const wrap = el(`
+        <div class="inline-delete delete-confirm-wrap">
+          <span>Eliminare definitivamente?</span>
+          <button class="btn-outline" style="padding:5px 12px;font-size:13px;border-color:color-mix(in srgb,var(--destructive) 40%,transparent);color:var(--destructive)">Elimina</button>
+          <button class="btn-ghost" style="padding:5px 10px;font-size:13px">Annulla</button>
+        </div>
+      `);
+      row.appendChild(wrap);
+      wrap.querySelectorAll('button')[0].addEventListener('click', () => deleteFileAction(f, row, render));
+      wrap.querySelectorAll('button')[1].addEventListener('click', () => setMode('idle'));
+    }
+
+    if (m === 'move') {
+      showMoveDialog(f, render);
+      mode = 'idle';
+    }
   };
 
-  btnCancel.addEventListener('click', cancelRename);
-  btnConfirm.addEventListener('click', () => renameFile(f, input.value.trim(), row, render));
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  btnConfirm.click();
-    if (e.key === 'Escape') cancelRename();
-  });
-
-  row.querySelector('.btn-delete').addEventListener('click', () => {
-    rowActions.style.display = 'none';
-    deleteActions.style.display = 'flex';
-  });
-  row.querySelector('.btn-delete-cancel').addEventListener('click', () => {
-    deleteActions.style.display = 'none';
-    rowActions.style.display = 'flex';
-  });
-  row.querySelector('.btn-delete-confirm').addEventListener('click', () => deleteFileAction(f, row, render));
+  actions.querySelector('.btn-rename').addEventListener('click', (e) => { e.stopPropagation(); setMode('rename'); });
+  actions.querySelector('.btn-move').addEventListener('click', (e) => { e.stopPropagation(); setMode('move'); });
+  actions.querySelector('.btn-delete').addEventListener('click', (e) => { e.stopPropagation(); setMode('delete'); });
 
   return row;
 }
 
-function buildDirRow(d, render) {
-  const row = el(`
-    <li class="file-row" data-path="${escapeAttr(d.path)}">
-      <div style="flex:1;min-width:0">
-        <div class="file-name" style="display:flex;align-items:center;gap:7px">
-          <span style="font-size:16px;line-height:1;flex-shrink:0">📁</span>
-          <span class="dir-label">${escapeHtml(d.name)}</span>
-          <input class="rename-input" type="text" value="${escapeAttr(d.name)}"
-            style="display:none;flex:1;font-size:14px;font-family:inherit;padding:4px 8px;
-                   border:1.5px solid var(--accent-color);border-radius:var(--radius-xs);
-                   background:var(--surface);color:var(--ink);">
-        </div>
-      </div>
-      <div class="row-actions" style="display:flex;gap:6px;flex-shrink:0">
-        <button class="secondary btn-rename-dir" title="Rinomina cartella">✏️</button>
-        <button class="secondary btn-open-dir">Apri cartella</button>
-      </div>
-      <div class="rename-actions" style="display:none;gap:6px;flex-shrink:0">
-        <button class="btn-rename-confirm">✓ Rinomina</button>
-        <button class="secondary btn-rename-cancel">Annulla</button>
-      </div>
-    </li>
+function buildDirRow(d, render, onOpenFile) {
+  const row = document.createElement('li');
+  row.className = 'file-row';
+  row.dataset.path = d.path;
+
+  const icon = el(`<span class="file-row-icon" style="color:var(--muted-foreground)">${iconSvg('folder')}</span>`);
+  const body = el(`
+    <div class="file-row-body" style="cursor:pointer">
+      <div class="file-row-name">${escapeHtml(d.name)}</div>
+    </div>
+  `);
+  body.addEventListener('click', () => navigate(d.path, render));
+
+  const actions = el(`
+    <div class="file-row-actions">
+      <button class="btn-icon btn-rename-dir" title="Rinomina cartella">${iconSvg('pencil')}</button>
+    </div>
   `);
 
-  const label         = row.querySelector('.dir-label');
-  const input         = row.querySelector('.rename-input');
-  const rowActions    = row.querySelector('.row-actions');
-  const renameActions = row.querySelector('.rename-actions');
-  const btnConfirm    = row.querySelector('.btn-rename-confirm');
-  const btnCancel     = row.querySelector('.btn-rename-cancel');
+  const openBtn = el(`
+    <button class="btn-ghost" style="flex-shrink:0;color:var(--muted-foreground);padding:6px 8px">
+      ${iconSvg('chevron')}
+    </button>
+  `);
+  openBtn.addEventListener('click', () => navigate(d.path, render));
 
-  row.querySelector('.btn-open-dir').addEventListener('click', () => navigate(d.path, render));
+  row.appendChild(icon);
+  row.appendChild(body);
+  row.appendChild(actions);
+  row.appendChild(openBtn);
 
-  row.querySelector('.btn-rename-dir').addEventListener('click', () => {
-    label.style.display = 'none';
-    input.style.display = '';
-    rowActions.style.display = 'none';
-    renameActions.style.display = 'flex';
-    input.focus();
-    input.select();
-  });
-
-  const cancelRename = () => {
-    input.value = d.name;
-    label.style.display = '';
-    input.style.display = 'none';
-    rowActions.style.display = 'flex';
-    renameActions.style.display = 'none';
-  };
-
-  btnCancel.addEventListener('click', cancelRename);
-  btnConfirm.addEventListener('click', () => renameFolder(d, input.value.trim(), row, render));
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  btnConfirm.click();
-    if (e.key === 'Escape') cancelRename();
+  actions.querySelector('.btn-rename-dir').addEventListener('click', (e) => {
+    e.stopPropagation();
+    actions.style.display = 'none';
+    openBtn.style.display = 'none';
+    const wrap = el(`
+      <div class="inline-rename rename-input-wrap">
+        <input class="rename-input" type="text" value="${escapeAttr(d.name)}" spellcheck="false">
+        <button class="btn-outline" style="padding:5px 12px;font-size:13px">✓</button>
+        <button class="btn-ghost" style="padding:5px 10px;font-size:13px">✕</button>
+      </div>
+    `);
+    row.appendChild(wrap);
+    const input = wrap.querySelector('input');
+    const ok = wrap.querySelectorAll('button')[0];
+    const cancel = wrap.querySelectorAll('button')[1];
+    input.focus(); input.select();
+    const cancelFn = () => { wrap.remove(); actions.style.display = ''; openBtn.style.display = ''; };
+    cancel.addEventListener('click', cancelFn);
+    ok.addEventListener('click', () => renameFolder(d, input.value.trim(), row, render));
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); if (e.key === 'Escape') cancelFn(); });
   });
 
   return row;
+}
+
+function showMoveDialog(file, render) {
+  const allDirs = [...(state.dirs || []), ...(state.searchDirs || [])];
+  const rootFolder = state.currentFolder || state.config.folder;
+
+  const overlay = el(`<div class="dialog-overlay"></div>`);
+  const box = el(`
+    <div class="dialog-box">
+      <h2 class="dialog-title">Sposta &ldquo;${escapeHtml(file.name)}&rdquo;</h2>
+      <p style="font-size:13px;color:var(--muted-foreground);margin:0 0 14px">Scegli la cartella di destinazione:</p>
+      <div id="move-dir-list" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;max-height:220px;overflow-y:auto"></div>
+      <div class="dialog-footer">
+        <button class="btn-outline" id="move-cancel">Annulla</button>
+      </div>
+    </div>
+  `);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  const list = box.querySelector('#move-dir-list');
+  const options = [{ name: rootFolder.split('/').pop(), path: rootFolder }, ...allDirs.filter(d => d.path !== parentFolderOf(file.path))];
+
+  if (!options.length) {
+    list.innerHTML = `<div style="padding:16px;text-align:center;font-size:13px;color:var(--muted-foreground)">Nessuna cartella disponibile.</div>`;
+  } else {
+    options.forEach(dir => {
+      const btn = el(`
+        <button style="display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;border:none;border-bottom:1px solid var(--border);background:none;font-family:inherit;font-size:14px;cursor:pointer;color:var(--foreground);text-align:left;transition:background .1s">
+          ${iconSvg('folder')} ${escapeHtml(dir.name)}
+        </button>
+      `);
+      btn.addEventListener('mouseenter', () => btn.style.background = 'var(--muted)');
+      btn.addEventListener('mouseleave', () => btn.style.background = '');
+      btn.addEventListener('click', () => {
+        overlay.remove();
+        moveFile(file, dir.path, render);
+      });
+      list.appendChild(btn);
+    });
+    if (list.lastChild) list.lastChild.style.borderBottom = 'none';
+  }
+
+  box.querySelector('#move-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 let refreshSeq = 0;
@@ -363,31 +435,23 @@ function removeFileEverywhere(path) {
 function replaceFileEverywhere(oldPath, updatedFile) {
   const query         = (state.searchQuery || '').trim().toLowerCase();
   const currentFolder = state.currentFolder || state.config.folder;
-
   state.files = state.files.filter(x => x.path !== oldPath);
   if (parentFolderOf(updatedFile.path) === currentFolder) {
-    state.files = state.files.concat([updatedFile]).sort((a, b) => a.name.localeCompare(b.name));
+    state.files = [...state.files, updatedFile].sort((a, b) => a.name.localeCompare(b.name));
   }
-
   state.searchFiles = state.searchFiles.filter(x => x.path !== oldPath);
   if (query && updatedFile.name.toLowerCase().includes(query)) {
-    state.searchFiles = state.searchFiles.concat([updatedFile]).sort((a, b) => a.name.localeCompare(b.name));
+    state.searchFiles = [...state.searchFiles, updatedFile].sort((a, b) => a.name.localeCompare(b.name));
   }
 }
 
 function replaceDirEverywhere(oldPath, updatedDir) {
-  const query         = (state.searchQuery || '').trim().toLowerCase();
   const currentFolder = state.currentFolder || state.config.folder;
-
   state.dirs = state.dirs.filter(x => x.path !== oldPath);
   if (parentFolderOf(updatedDir.path) === currentFolder) {
-    state.dirs = state.dirs.concat([updatedDir]).sort((a, b) => a.name.localeCompare(b.name));
+    state.dirs = [...state.dirs, updatedDir].sort((a, b) => a.name.localeCompare(b.name));
   }
-
   state.searchDirs = state.searchDirs.filter(x => x.path !== oldPath);
-  if (query && updatedDir.name.toLowerCase().includes(query)) {
-    state.searchDirs = state.searchDirs.concat([updatedDir]).sort((a, b) => a.name.localeCompare(b.name));
-  }
 }
 
 function navigate(path, render) {
@@ -398,30 +462,19 @@ function navigate(path, render) {
 
 async function renameFile(file, newName, rowEl, render) {
   if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
-
-  const finalName = newName.toLowerCase().endsWith('.json') ? newName : newName + '.json';
-  if (finalName === file.name) {
-    rowEl.querySelector('.file-label').style.display = '';
-    rowEl.querySelector('.rename-input').style.display = 'none';
-    rowEl.querySelector('.row-actions').style.display = 'flex';
-    rowEl.querySelector('.rename-actions').style.display = 'none';
-    return;
-  }
-
+  if (newName === file.name) { render(); return; }
   if (state.actionBusy) return;
 
   const folder  = parentFolderOf(file.path);
-  const newPath = `${folder}/${finalName}`;
+  const newPath = `${folder}/${newName}`;
 
   state.actionBusy = true;
-  rowEl.querySelectorAll('button').forEach(b => b.disabled = true);
-  rowEl.querySelector('.btn-rename-confirm').textContent = '…';
   render();
 
   try {
-    await renameFileAtomic(state.config, file.path, newPath, file.sha, `chore: rinomina "${file.name}" in "${finalName}"`);
-    replaceFileEverywhere(file.path, { ...file, name: finalName, path: newPath });
-    state.info = `"${file.name}" rinominato in "${finalName}".`;
+    await renameFileAtomic(state.config, file.path, newPath, file.sha, `chore: rinomina "${file.name}" in "${newName}"`);
+    replaceFileEverywhere(file.path, { ...file, name: newName, path: newPath });
+    state.info = `"${file.name}" rinominato in "${newName}".`;
   } catch (e) {
     state.error = `Rinomina non riuscita: ${e.message}`;
   }
@@ -431,12 +484,8 @@ async function renameFile(file, newName, rowEl, render) {
 
 async function deleteFileAction(file, rowEl, render) {
   if (state.actionBusy) return;
-
   state.actionBusy = true;
-  rowEl.querySelectorAll('button').forEach(b => b.disabled = true);
-  rowEl.querySelector('.btn-delete-confirm').textContent = '…';
   render();
-
   try {
     await deleteFile(state.config, file.path, file.sha, `chore: elimina "${file.name}"`);
     removeFileEverywhere(file.path);
@@ -448,24 +497,39 @@ async function deleteFileAction(file, rowEl, render) {
   render();
 }
 
-async function renameFolder(dir, newName, rowEl, render) {
-  if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
-  if (newName === dir.name) {
-    rowEl.querySelector('.dir-label').style.display = '';
-    rowEl.querySelector('.rename-input').style.display = 'none';
-    rowEl.querySelector('.row-actions').style.display = 'flex';
-    rowEl.querySelector('.rename-actions').style.display = 'none';
-    return;
-  }
+async function moveFile(file, destFolder, render) {
+  if (state.actionBusy) return;
+  const newPath = `${destFolder}/${file.name}`;
+  if (newPath === file.path) return;
 
+  state.actionBusy = true;
+  state.error = null;
+  state.info = null;
+  render();
+
+  try {
+    const { renameAndUpdateFileAtomic } = await import('../api/github.js');
+    const { fetchFile, bytesToBase64 } = await import('../api/github.js');
+    const { bytes } = await fetchFile(state.config, file.path);
+    const base64 = bytesToBase64(bytes);
+    await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: sposta "${file.name}" in "${destFolder}"`);
+    removeFileEverywhere(file.path);
+    state.info = `"${file.name}" spostato in "${destFolder}".`;
+  } catch (e) {
+    state.error = `Spostamento non riuscito: ${e.message}`;
+  }
+  state.actionBusy = false;
+  render();
+}
+
+async function renameFolder(dir, newName, rowEl, render) {
+  if (!newName || newName === dir.name) { render(); return; }
   if (state.actionBusy) return;
 
   const parent  = parentFolderOf(dir.path);
   const newPath = `${parent}/${newName}`;
 
   state.actionBusy = true;
-  rowEl.querySelectorAll('button').forEach(b => b.disabled = true);
-  rowEl.querySelector('.btn-rename-confirm').textContent = '…';
   render();
 
   try {
