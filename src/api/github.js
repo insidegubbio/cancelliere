@@ -9,6 +9,17 @@ function apiBase(cfg) {
   return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`;
 }
 
+export async function getAuthenticatedUser(cfg) {
+  try {
+    const res = await fetch('https://api.github.com/user', { headers: ghHeaders(cfg.token) });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data?.login || null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function encodePath(path) {
   return path.split('/').map(encodeURIComponent).join('/');
 }
