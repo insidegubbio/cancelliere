@@ -1,5 +1,18 @@
 import { escapeHtml } from '../ui/helpers.js';
-const HEADING_LEVELS = [1, 2, 3];
+
+const WORD_STYLE_TO_LEVEL = {
+  'heading 1': 1,
+  'heading 2': 2,
+  'heading 3': 3,
+  'heading 4': 3,
+  'title': 1,
+  'subtitle': 2,
+};
+
+function levelFromStyle(style) {
+  if (!style) return null;
+  return WORD_STYLE_TO_LEVEL[String(style).toLowerCase()] || null;
+}
 
 export function bodyToHtml(body) {
   if (!Array.isArray(body) || body.length === 0) return '<p></p>';
@@ -16,36 +29,43 @@ export function bodyToHtml(body) {
   }
 
   body.forEach(block => {
-    const type = block?.type;
-
-    if (type === 'list_item') {
-      const ordered = !!block.ordered;
-      if (!listBuffer || listBuffer.ordered !== ordered) {
-        flushList();
-        listBuffer = { ordered, items: [] };
-      }
-      listBuffer.items.push(block.runs || []);
-      return;
-    }
-
-    flushList();
-
-    if (type === 'heading') {
-      const level = HEADING_LEVELS.includes(block.level) ? block.level : 1;
-      chunks.push(`<h${level}>${runsToHtml(block.runs)}</h${level}>`);
-    } else if (type === 'table') {
+    if (block?.type === 'table') {
+      flushList();
       const rows = Array.isArray(block.rows) ? block.rows : [];
       const rowsHtml = rows.map((row, ri) => {
         const cellsHtml = (row || []).map(cell => {
           const isHeader = cell?.header ?? (ri === 0);
           const tag = isHeader ? 'th' : 'td';
-          return `<${tag}>${runsToHtml(cell?.runs)}</${tag}>`;
+          const runs = cell?.runs || (cell?.text != null ? [{ text: cell.text }] : []);
+          return `<${tag}>${runsToHtml(runs)}</${tag}>`;
         }).join('');
         return `<tr>${cellsHtml}</tr>`;
       }).join('');
       chunks.push(`<table><tbody>${rowsHtml}</tbody></table>`);
+      return;
+    }
+
+    const runs = Array.isArray(block?.runs) && block.runs.length
+      ? block.runs
+      : (block?.text ? [{ text: block.text }] : []);
+
+    if (block?.list) {
+      const ordered = block.list.type === 'number' || block.list.ordered === true || block.list.numbered === true;
+      if (!listBuffer || listBuffer.ordered !== ordered) {
+        flushList();
+        listBuffer = { ordered, items: [] };
+      }
+      listBuffer.items.push(runs);
+      return;
+    }
+
+    flushList();
+
+    const level = levelFromStyle(block?.style);
+    if (level) {
+      chunks.push(`<h${level}>${runsToHtml(runs)}</h${level}>`);
     } else {
-      chunks.push(`<p>${runsToHtml(block?.runs)}</p>`);
+      chunks.push(`<p>${runsToHtml(runs)}</p>`);
     }
   });
 
@@ -57,9 +77,11 @@ function runsToHtml(runs) {
   if (!Array.isArray(runs) || runs.length === 0) return '';
   return runs.map(r => {
     let text = escapeHtml(r?.text ?? '').replace(/\n/g, '<br>');
+    if (!text) return '';
     if (r?.bold) text = `<strong>${text}</strong>`;
     if (r?.italic) text = `<em>${text}</em>`;
     if (r?.underline) text = `<u>${text}</u>`;
+    if (r?.strike) text = `<s>${text}</s>`;
     return text;
   }).join('');
 }
@@ -72,31 +94,54 @@ export function htmlToBody(html) {
   return body;
 }
 
+function blankParagraphExtras() {
+  return {
+    alignment: null,
+    indentation: { left_pt: null, right_pt: null, first_line_pt: null },
+    spacing: { before_pt: null, after_pt: null, line_spacing: null },
+    hyperlinks: [],
+    images: [],
+  };
+}
+
+function makeParagraph(style, runs, list) {
+  return {
+    type: 'paragraph',
+    style,
+    text: runs.map(r => r.text ?? '').join(''),
+    list: list || null,
+    runs,
+    ...blankParagraphExtras(),
+  };
+}
+
 function nodeToBlocks(node, body) {
   if (node.nodeType !== 1) return;
   const tag = node.tagName.toLowerCase();
 
   if (/^h[1-4]$/.test(tag)) {
-    body.push({ type: 'heading', level: Math.min(3, parseInt(tag[1], 10)), runs: runsFromInline(node, {}) });
+    const level = Math.min(3, parseInt(tag[1], 10));
+    body.push(makeParagraph(`Heading ${level}`, runsFromInline(node, {})));
   } else if (tag === 'ul' || tag === 'ol') {
     const ordered = tag === 'ol';
     node.querySelectorAll(':scope > li').forEach(li => {
-      body.push({ type: 'list_item', ordered, runs: runsFromInline(li, {}) });
+      body.push(makeParagraph('Normal', runsFromInline(li, {}), { type: ordered ? 'number' : 'bullet', level: 0 }));
     });
   } else if (tag === 'table') {
     const rows = [];
     node.querySelectorAll('tr').forEach(tr => {
       const row = [];
       tr.querySelectorAll('th, td').forEach(cell => {
-        row.push({ runs: runsFromInline(cell, {}), header: cell.tagName.toLowerCase() === 'th' });
+        const runs = runsFromInline(cell, {});
+        row.push({ runs, text: runs.map(r => r.text ?? '').join(''), header: cell.tagName.toLowerCase() === 'th' });
       });
       rows.push(row);
     });
     body.push({ type: 'table', rows });
   } else if (tag === 'p' || tag === 'div') {
-    body.push({ type: 'paragraph', runs: runsFromInline(node, {}) });
+    body.push(makeParagraph('Normal', runsFromInline(node, {})));
   } else if (node.textContent.trim()) {
-    body.push({ type: 'paragraph', runs: runsFromInline(node, {}) });
+    body.push(makeParagraph('Normal', runsFromInline(node, {})));
   }
 }
 
@@ -104,19 +149,36 @@ function runsFromInline(node, fmt) {
   let runs = [];
   node.childNodes.forEach(child => {
     if (child.nodeType === 3) {
-      if (child.textContent) runs.push({ ...fmt, text: child.textContent });
+      if (child.textContent) runs.push(makeRun(child.textContent, fmt));
       return;
     }
     if (child.nodeType !== 1) return;
     const t = child.tagName.toLowerCase();
-    if (t === 'br') { runs.push({ ...fmt, text: '\n' }); return; }
+    if (t === 'br') { runs.push(makeRun('\n', fmt)); return; }
     const newFmt = { ...fmt };
     if (t === 'strong' || t === 'b') newFmt.bold = true;
     if (t === 'em' || t === 'i') newFmt.italic = true;
     if (t === 'u') newFmt.underline = true;
+    if (t === 's' || t === 'strike' || t === 'del') newFmt.strike = true;
     runs = runs.concat(runsFromInline(child, newFmt));
   });
   return runs;
+}
+
+function makeRun(text, fmt) {
+  return {
+    text,
+    bold: fmt.bold || null,
+    italic: fmt.italic || null,
+    underline: fmt.underline || null,
+    strike: fmt.strike || null,
+    superscript: null,
+    subscript: null,
+    font_name: null,
+    font_size_pt: null,
+    color: null,
+    highlight: null,
+  };
 }
 
 export function bodyToPlainText(body) {
@@ -125,9 +187,10 @@ export function bodyToPlainText(body) {
     .map(block => {
       if (block?.type === 'table') {
         return (block.rows || [])
-          .map(row => (row || []).map(cell => runsToPlain(cell?.runs)).join(' \t '))
+          .map(row => (row || []).map(cell => cell?.text ?? runsToPlain(cell?.runs)).join(' \t '))
           .join('\n');
       }
+      if (typeof block?.text === 'string' && block.text) return block.text;
       return runsToPlain(block?.runs);
     })
     .filter(Boolean)
