@@ -168,6 +168,14 @@ function renderEditor() {
   `);
   app.appendChild(top);
 
+  const titleRow = el(`
+    <div class="field-row" style="margin:0 0 16px">
+      <label class="eyebrow" for="f-title" style="display:block;margin-bottom:4px">Titolo</label>
+      <input class="filename-edit" id="f-title" type="text" value="${escapeAttr(doc.title || '')}" style="width:100%">
+    </div>
+  `);
+  app.appendChild(titleRow);
+
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
 
@@ -249,8 +257,9 @@ function renderEditor() {
 
   app.appendChild(el(`
     <footer class="note">
-      Slug, titolo, categoria, riepilogo e immagini restano invariati e vengono preservati così come sono nel file.
-      Autore ultima modifica, titolo (meta) e data di modifica si aggiornano automaticamente a ogni salvataggio.
+      Categoria, riepilogo e immagini restano invariati e vengono preservati così come sono nel file.
+      Slug e titolo sono editabili qui sopra: il titolo aggiornato viene salvato sia nel campo "title" sia nei metadati (core_properties).
+      Autore ultima modifica e data di modifica si aggiornano automaticamente a ogni salvataggio.
     </footer>
   `));
 
@@ -301,6 +310,8 @@ async function saveFile(htmlContent) {
   const btn = document.getElementById('btn-save');
   if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
 
+  const rawTitle = document.getElementById('f-title').value.trim();
+
   try {
     const username = await ensureUsername();
     const { doc } = state.current;
@@ -308,17 +319,19 @@ async function saveFile(htmlContent) {
     const now = new Date().toISOString();
     const body = htmlToBody(htmlContent);
     const fullText = bodyToPlainText(body);
+    const finalTitle = rawTitle || doc.title || '';
 
     const newDoc = {
       ...doc,
       slug: finalName,
+      title: finalTitle,
       body,
       full_text: fullText,
       word_count: fullText.trim() ? fullText.trim().split(/\s+/).filter(Boolean).length : 0,
       core_properties: {
         ...cp,
         last_modified_by: username || cp.last_modified_by || '',
-        title: doc.title || cp.title || '',
+        title: finalTitle,
         modified: now,
         revision: (cp.revision ?? 0) + 1,
       },
