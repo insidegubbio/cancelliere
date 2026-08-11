@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder } from '../api/github.js';
+import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile } from '../api/github.js';
 import { loadCategoriesIndex } from '../api/categories.js';
 import { state } from '../state.js';
 
@@ -591,6 +591,12 @@ function navigate(path, render) {
   refreshList(render);
 }
 
+async function ensureFileSha(file) {
+  if (file.sha) return file.sha;
+  const { sha } = await fetchFile(state.config, file.path);
+  return sha;
+}
+
 async function renameFile(file, newName, rowEl, render) {
   if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
   const currentSlug = file.slug || file.name;
@@ -604,7 +610,8 @@ async function renameFile(file, newName, rowEl, render) {
   render();
 
   try {
-    await renameFileAtomic(state.config, file.path, newPath, file.sha, `chore: rinomina "${currentSlug}" in "${newName}"`);
+    const sha = await ensureFileSha(file);
+    await renameFileAtomic(state.config, file.path, newPath, sha, `chore: rinomina "${currentSlug}" in "${newName}"`);
     if (file.categorySlug) categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
@@ -620,7 +627,8 @@ async function deleteFileAction(file, rowEl, render) {
   state.actionBusy = true;
   render();
   try {
-    await deleteFile(state.config, file.path, file.sha, `chore: elimina "${file.name}"`);
+    const sha = await ensureFileSha(file);
+    await deleteFile(state.config, file.path, sha, `chore: elimina "${file.name}"`);
     if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
