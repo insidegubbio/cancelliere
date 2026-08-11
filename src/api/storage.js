@@ -16,8 +16,6 @@ export async function loadConfig() {
 export async function saveConfig(cfg) {
   const { token, ...rest } = cfg;
   localStorage.setItem(CONFIG_KEY, JSON.stringify(rest));
-  if (token) sessionStorage.setItem(TOKEN_KEY, token);
-  else sessionStorage.removeItem(TOKEN_KEY);
 }
 
 export async function clearConfig() {
