@@ -402,11 +402,15 @@ async function boot() {
   }
 
   const cfg = await loadConfig();
-  if (cfg) {
+  if (cfg && cfg.token) {
     state.config = cfg;
     state.screen = 'list';
     await refreshList(render);
     ensureUsername();
+  } else if (cfg) {
+    state.config = cfg;
+    state.screen = 'setup';
+    render();
   } else {
     state.screen = 'setup';
     render();
