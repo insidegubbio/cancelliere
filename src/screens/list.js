@@ -1,7 +1,7 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
 import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, bytesToBase64 } from '../api/github.js';
-import { loadCategoriesIndex } from '../api/categories.js';
+import { loadCategoriesIndex, saveCategoriesIndex } from '../api/categories.js';
 import { state } from '../state.js';
 
 export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
@@ -487,6 +487,7 @@ export async function refreshList(render) {
       if (seq !== refreshSeq) return;
       state.categoriesIndex = idx ? idx.categories : false;
       state.categoriesPath = idx ? idx.path : null;
+      state.categoriesSha = idx ? idx.sha : null;
     }
     if (state.categoriesIndex) {
       applyVirtualFolder();
@@ -528,9 +529,17 @@ function applyVirtualFolder() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Aggiorna in memoria l'indice categorie dopo create/rename/delete, così la
-// vista resta coerente in questa sessione. Non riscrive il file indice su
-// GitHub.
+async function persistCategoriesIndex(commitMessage) {
+  if (!state.categoriesIndex || !state.categoriesPath) return;
+  try {
+    state.categoriesSha = await saveCategoriesIndex(
+      state.config, state.categoriesPath, state.categoriesIndex, state.categoriesSha, commitMessage
+    );
+  } catch (e) {
+    state.error = `Indice categorie non sincronizzato su GitHub: ${e.message}`;
+  }
+}
+
 function categoriesIndexAddArticle(categorySlug, article) {
   if (!state.categoriesIndex) return;
   const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
@@ -630,7 +639,10 @@ async function renameFile(file, newName, rowEl, render) {
       base64 = bytesToBase64(bytes);
     }
     await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: rinomina "${currentSlug}" in "${newName}"`);
-    if (file.categorySlug) categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
+    if (file.categorySlug) {
+      categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
+      await persistCategoriesIndex(`chore: aggiorna indice dopo rinomina "${currentSlug}" -> "${newName}"`);
+    }
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
   } catch (e) {
@@ -655,7 +667,10 @@ async function deleteFileAction(file, rowEl, render) {
   try {
     const sha = await ensureFileSha(file);
     await deleteFile(state.config, file.path, sha, `chore: elimina "${file.name}"`);
-    if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
+    if (file.categorySlug) {
+      categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
+      await persistCategoriesIndex(`chore: aggiorna indice dopo eliminazione "${file.name}"`);
+    }
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
   } catch (e) {
