@@ -1,7 +1,7 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
 import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, bytesToBase64 } from '../api/github.js';
-import { loadCategoriesIndex } from '../api/categories.js';
+import { loadCategoriesIndex, saveCategoriesIndex } from '../api/categories.js';
 import { state } from '../state.js';
 
 export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
@@ -487,6 +487,7 @@ export async function refreshList(render) {
       if (seq !== refreshSeq) return;
       state.categoriesIndex = idx ? idx.categories : false;
       state.categoriesPath = idx ? idx.path : null;
+      state.categoriesSha = idx ? idx.sha : null;
     }
     if (state.categoriesIndex) {
       applyVirtualFolder();
@@ -526,6 +527,17 @@ function applyVirtualFolder() {
       categorySlug: slug,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function persistCategoriesIndex(commitMessage) {
+  if (!state.categoriesIndex || !state.categoriesPath) return;
+  try {
+    state.categoriesSha = await saveCategoriesIndex(
+      state.config, state.categoriesPath, state.categoriesIndex, state.categoriesSha, commitMessage
+    );
+  } catch (e) {
+    state.error = `Indice categorie non sincronizzato su GitHub: ${e.message}`;
+  }
 }
 
 function categoriesIndexAddArticle(categorySlug, article) {
@@ -594,6 +606,16 @@ async function ensureFileSha(file) {
   return sha;
 }
 
+async function recoverStaleList(render) {
+  state.categoriesIndex = null;
+  state.categoriesPath = null;
+  await refreshList(render);
+}
+
+function staleItemMessage(label) {
+  return `"${label}" non esiste più a questo percorso: probabilmente è stato rinominato, spostato o eliminato da un altro utente nel frattempo. La lista è stata aggiornata.`;
+}
+
 async function renameFile(file, newName, rowEl, render) {
   if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
   const currentSlug = file.slug || file.name;
@@ -617,11 +639,22 @@ async function renameFile(file, newName, rowEl, render) {
       base64 = bytesToBase64(bytes);
     }
     await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: rinomina "${currentSlug}" in "${newName}"`);
-    if (file.categorySlug) categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
+    if (file.categorySlug) {
+      categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
+      await persistCategoriesIndex(`chore: aggiorna indice dopo rinomina "${currentSlug}" -> "${newName}"`);
+    }
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
   } catch (e) {
-    state.error = `Rinomina non riuscita: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(currentSlug);
+    } else {
+      state.error = `Rinomina non riuscita: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
@@ -634,11 +667,22 @@ async function deleteFileAction(file, rowEl, render) {
   try {
     const sha = await ensureFileSha(file);
     await deleteFile(state.config, file.path, sha, `chore: elimina "${file.name}"`);
-    if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
+    if (file.categorySlug) {
+      categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
+      await persistCategoriesIndex(`chore: aggiorna indice dopo eliminazione "${file.name}"`);
+    }
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
   } catch (e) {
-    state.error = `Eliminazione non riuscita: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(file.name);
+    } else {
+      state.error = `Eliminazione non riuscita: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
@@ -655,15 +699,21 @@ async function moveFile(file, destFolder, render) {
   render();
 
   try {
-    const { renameAndUpdateFileAtomic } = await import('../api/github.js');
-    const { fetchFile, bytesToBase64 } = await import('../api/github.js');
     const { bytes } = await fetchFile(state.config, file.path);
     const base64 = bytesToBase64(bytes);
     await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: sposta "${file.name}" in "${destFolder}"`);
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" spostato in "${destFolder}".`;
   } catch (e) {
-    state.error = `Spostamento non riuscito: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(file.name);
+    } else {
+      state.error = `Spostamento non riuscito: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
@@ -684,7 +734,15 @@ async function renameFolder(dir, newName, rowEl, render) {
     replaceDirEverywhere(dir.path, { ...dir, name: newName, path: newPath });
     state.info = `Cartella "${dir.name}" rinominata in "${newName}".`;
   } catch (e) {
-    state.error = `Rinomina cartella non riuscita: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(dir.name);
+    } else {
+      state.error = `Rinomina cartella non riuscita: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();

@@ -45,6 +45,7 @@ function errorMessage(status, body) {
   if (status === 404) return `Repository o cartella non trovati (o il token non ha accesso). Dettaglio: ${msg}`;
   if (status === 403) return `Accesso negato dal token. Verifica i permessi (Contents: Read and write). Dettaglio: ${msg}`;
   if (status === 409) return `Il file è stato modificato altrove (es. da uno script) dopo che l'hai aperto qui. Dettaglio: ${msg}`;
+  if (status === 422 && msg.toLowerCase().includes('not a fast forward')) return 'Il branch è stato aggiornato da un\'altra operazione durante il salvataggio. Riprova tra un momento.';
   return `Errore GitHub (${status}): ${msg}`;
 }
 
@@ -280,6 +281,11 @@ async function commitTreeChange(cfg, buildEntries, commitMessage) {
     } catch (e) {
       lastErr = e;
       headCache.delete(key);
+      // retry when 422
+      const isRetryable = !(e instanceof GhApiError) ||
+        e.status === 422 ||
+        e.status === 409;
+      if (!isRetryable) throw e;
       if (attempt < 3) await new Promise(r => setTimeout(r, 350 * (attempt + 1)));
     }
   }
