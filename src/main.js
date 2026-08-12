@@ -76,12 +76,26 @@ async function onOpenFile(file) {
     }
 
     state.current = { file, sha, doc };
-  }, { onError: e => `Impossibile aprire il file: ${e.message}` });
+  }, {
+    onError: e => e.status === 404
+      ? `"${file.slug || file.name}" non esiste più a questo percorso: probabilmente è stato rinominato o spostato da un altro utente nel frattempo. La lista è stata aggiornata, riprova dalla riga corretta.`
+      : `Impossibile aprire il file: ${e.message}`,
+  });
 
   state.busy = false;
-  if (result.ok) state.screen = 'editor';
-  else state.error = result.error;
-  render();
+  if (result.ok) {
+    state.screen = 'editor';
+    render();
+  } else if (result.error.includes('non esiste più a questo percorso')) {
+    state.categoriesIndex = null;
+    state.categoriesPath = null;
+    await refreshList(render);
+    state.error = result.error;
+    render();
+  } else {
+    state.error = result.error;
+    render();
+  }
 }
 
 function onNewFile() {
