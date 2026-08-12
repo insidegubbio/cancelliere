@@ -5,53 +5,30 @@ import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
 import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
-import { bodyToHtml, htmlToBody, bodyToPlainText } from './json/body.js';
+import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
+import { createEmptyDocument } from './json/defaults.js';
+import { Editor, createTiptapExtensions, TOOLBAR_GROUPS, EDITOR_ACTIONS, TOOLBAR_ACTIVE_CHECKS } from './editor/config.js';
 import { el, escapeHtml, escapeAttr } from './ui/helpers.js';
-import { Editor } from '@tiptap/core';
-import StarterKit from '@tiptap/starter-kit';
-import { Underline } from '@tiptap/extension-underline';
-import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 
 const app = document.getElementById('app');
 let editor = null;
 
-function emptyJsonDoc(slug, category) {
-  const now = new Date().toISOString();
-  return {
-    slug: slug || '',
-    title: '',
-    summary: '',
-    category: category || '',
-    word_count: 0,
-    category_name: '',
-    full_text: '',
-    body: [],
-    images: [],
-    core_properties: {
-      title: '',
-      subject: '',
-      author: '',
-      last_modified_by: '',
-      created: now,
-      modified: now,
-      category: '',
-      comments: '',
-      keywords: '',
-      language: '',
-      revision: 0,
-    },
-  };
-}
-
 function jsonToBase64(obj) {
-  const str = JSON.stringify(obj, null, 2);
-  const bytes = new TextEncoder().encode(str);
+  const bytes = new TextEncoder().encode(JSON.stringify(obj, null, 2));
   return bytesToBase64(bytes);
 }
 
 function bytesToJson(bytes) {
-  const str = new TextDecoder().decode(bytes);
-  return JSON.parse(str);
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function attempt(task, { onError } = {}) {
+  try {
+    await task();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: onError ? onError(e) : e.message };
+  }
 }
 
 async function ensureUsername() {
@@ -63,18 +40,9 @@ async function ensureUsername() {
 }
 
 function render() {
-  if (state.screen === 'setup') {
-    renderSetup(app, state.config, state.error, onConnect, render);
-    return;
-  }
-  if (state.screen === 'list') {
-    renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder);
-    return;
-  }
-  if (state.screen === 'editor') {
-    renderEditor();
-    return;
-  }
+  if (state.screen === 'setup') return renderSetup(app, state.config, state.error, onConnect, render);
+  if (state.screen === 'list') return renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder);
+  if (state.screen === 'editor') return renderEditor();
   app.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;color:var(--ink-soft)"><span class="spinner"></span></div>';
 }
 
@@ -99,57 +67,60 @@ async function onOpenFile(file) {
   state.info = null;
   render();
 
-  try {
+  const result = await attempt(async () => {
     const { bytes, sha } = await fetchFile(state.config, file.path);
     const doc = bytesToJson(bytes);
+
+    if (!doc.body?.length && doc.monumenti?.length) {
+      doc.body = monumentiToBody(doc.monumenti);
+    }
+
     state.current = { file, sha, doc };
-    state.busy = false;
-    state.screen = 'editor';
-    render();
-  } catch (e) {
-    state.error = `Impossibile aprire il file: ${e.message}`;
-    state.busy = false;
-    render();
-  }
+  }, { onError: e => `Impossibile aprire il file: ${e.message}` });
+
+  state.busy = false;
+  if (result.ok) state.screen = 'editor';
+  else state.error = result.error;
+  render();
 }
 
 function onNewFile() {
-  const name = prompt('Nome del nuovo file JSON (senza estensione):');
-  if (!name || !name.trim()) return;
-  const slug = name.trim().toLowerCase().replace(/\s+/g, '-');
+  const name = prompt('Nome del nuovo file JSON (senza estensione):')?.trim();
+  if (!name) return;
+
+  const slug = name.toLowerCase().replace(/\s+/g, '-');
   const folder = state.currentFolder || state.config.folder;
   const category = folder.split('/').pop();
+
   state.current = {
     file: { name: slug, slug, path: `${folder}/${slug}` },
     sha: null,
-    doc: emptyJsonDoc(slug, category),
+    doc: createEmptyDocument(slug, category),
   };
   state.screen = 'editor';
   render();
 }
 
 async function onNewFolder() {
-  const name = prompt('Nome della nuova cartella:');
-  if (!name || !name.trim()) return;
-  const folderName = name.trim();
+  const name = prompt('Nome della nuova cartella:')?.trim();
+  if (!name) return;
 
   const folder = state.currentFolder || state.config.folder;
-  const newFolderPath = `${folder}/${folderName}`;
+  const path = `${folder}/${name}`;
 
   state.actionBusy = true;
   state.error = null;
   state.info = null;
   render();
 
-  try {
-    await createFolder(state.config, newFolderPath, `chore: crea cartella "${folderName}"`);
-    state.dirs = [...state.dirs, { name: folderName, path: newFolderPath }]
-      .sort((a, b) => a.name.localeCompare(b.name));
-    state.info = `Cartella "${folderName}" creata.`;
-  } catch (e) {
-    state.error = `Impossibile creare la cartella: ${e.message}`;
-  }
+  const result = await attempt(async () => {
+    await createFolder(state.config, path, `nuova cartella "${name}"`);
+    state.dirs = [...state.dirs, { name, path }].sort((a, b) => a.name.localeCompare(b.name));
+  }, { onError: e => `Impossibile creare la cartella: ${e.message}` });
+
   state.actionBusy = false;
+  if (result.ok) state.info = `Cartella "${name}" creata.`;
+  else state.error = result.error;
   render();
 }
 
@@ -176,32 +147,22 @@ function renderEditor() {
   `);
   app.appendChild(titleRow);
 
-  if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
-  if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
+  const bannerHost = document.createElement('div');
+  app.appendChild(bannerHost);
 
-  // toolbar
-  const toolbar = el(`
-    <div class="toolbar">
-      <button class="icon" data-action="bold" title="Grassetto"><b>B</b></button>
-      <button class="icon" data-action="italic" title="Corsivo"><i>I</i></button>
-      <button class="icon" data-action="underline" title="Sottolineato"><u>U</u></button>
-      <div class="sep"></div>
-      <button class="icon" data-action="h1" title="Titolo 1">H1</button>
-      <button class="icon" data-action="h2" title="Titolo 2">H2</button>
-      <button class="icon" data-action="h3" title="Titolo 3">H3</button>
-      <button class="icon" data-action="p" title="Paragrafo">P</button>
-      <div class="sep"></div>
-      <button class="icon" data-action="ul" title="Elenco puntato">&bull; &bull;</button>
-      <button class="icon" data-action="ol" title="Elenco numerato">1.2.</button>
-      <div class="sep"></div>
-      <button class="icon" data-action="table" title="Inserisci tabella">⊞</button>
-      <button class="icon" data-action="addRowAfter" title="Aggiungi riga">+↓</button>
-      <button class="icon" data-action="addColumnAfter" title="Aggiungi colonna">+→</button>
-      <button class="icon" data-action="deleteRow" title="Elimina riga">−↓</button>
-      <button class="icon" data-action="deleteColumn" title="Elimina colonna">−→</button>
-      <button class="icon" data-action="deleteTable" title="Elimina tabella">⊠</button>
-    </div>
-  `);
+  function showBanner(type, message) {
+    bannerHost.innerHTML = message ? `<div class="banner ${type}">${escapeHtml(message)}</div>` : '';
+  }
+
+  if (state.error) showBanner('error', state.error);
+  else if (state.info) showBanner('ok', state.info);
+  state.error = null;
+  state.info = null;
+
+  const toolbarHtml = TOOLBAR_GROUPS
+    .map(group => group.map(btn => `<button class="icon" data-action="${btn.action}" title="${btn.title}">${btn.label}</button>`).join(''))
+    .join('<div class="sep"></div>');
+  const toolbar = el(`<div class="toolbar">${toolbarHtml}</div>`);
   app.appendChild(toolbar);
 
   const editorEl = document.createElement('div');
@@ -210,42 +171,23 @@ function renderEditor() {
 
   editor = new Editor({
     element: editorEl,
-    extensions: [
-      StarterKit,
-      Underline,
-      Table.configure({ resizable: false }),
-      TableRow,
-      TableHeader,
-      TableCell,
-    ],
+    extensions: createTiptapExtensions(),
     content: bodyToHtml(doc.body),
     autofocus: true,
   });
 
   toolbar.querySelectorAll('button[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const a = btn.dataset.action;
-      const chain = editor.chain().focus();
-      if (a === 'bold')          chain.toggleBold().run();
-      else if (a === 'italic')   chain.toggleItalic().run();
-      else if (a === 'underline') chain.toggleUnderline().run();
-      else if (a === 'h1')       chain.toggleHeading({ level: 1 }).run();
-      else if (a === 'h2')       chain.toggleHeading({ level: 2 }).run();
-      else if (a === 'h3')       chain.toggleHeading({ level: 3 }).run();
-      else if (a === 'p')        chain.setParagraph().run();
-      else if (a === 'ul')       chain.toggleBulletList().run();
-      else if (a === 'ol')       chain.toggleOrderedList().run();
-      else if (a === 'table')    chain.insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
-      else if (a === 'addRowAfter')    chain.addRowAfter().run();
-      else if (a === 'addColumnAfter') chain.addColumnAfter().run();
-      else if (a === 'deleteRow')      chain.deleteRow().run();
-      else if (a === 'deleteColumn')   chain.deleteColumn().run();
-      else if (a === 'deleteTable')    chain.deleteTable().run();
-    });
+    btn.addEventListener('click', () => EDITOR_ACTIONS[btn.dataset.action]?.(editor));
   });
 
-  editor.on('selectionUpdate', () => updateToolbar(editor, toolbar));
-  editor.on('transaction',     () => updateToolbar(editor, toolbar));
+  const updateToolbarState = () => {
+    toolbar.querySelectorAll('button[data-action]').forEach(btn => {
+      const isActive = TOOLBAR_ACTIVE_CHECKS[btn.dataset.action];
+      if (isActive) btn.classList.toggle('active', isActive(editor));
+    });
+  };
+  editor.on('selectionUpdate', updateToolbarState);
+  editor.on('transaction', updateToolbarState);
 
   const saveRow = el(`
     <div class="save-row">
@@ -273,46 +215,22 @@ function renderEditor() {
     render();
   });
 
-  document.getElementById('btn-save').addEventListener('click', () => saveFile(editor.getHTML()));
+  document.getElementById('btn-save').addEventListener('click', () => saveFile(editor.getHTML(), showBanner));
 }
 
-function updateToolbar(editor, toolbar) {
-  const map = {
-    bold:      () => editor.isActive('bold'),
-    italic:    () => editor.isActive('italic'),
-    underline: () => editor.isActive('underline'),
-    h1:        () => editor.isActive('heading', { level: 1 }),
-    h2:        () => editor.isActive('heading', { level: 2 }),
-    h3:        () => editor.isActive('heading', { level: 3 }),
-    p:         () => editor.isActive('paragraph'),
-    ul:        () => editor.isActive('bulletList'),
-    ol:        () => editor.isActive('orderedList'),
-  };
-  toolbar.querySelectorAll('button[data-action]').forEach(btn => {
-    const check = map[btn.dataset.action];
-    if (check) btn.classList.toggle('active', check());
-  });
-}
-
-async function saveFile(htmlContent) {
-  state.error = null;
-  state.info = null;
-
+async function saveFile(htmlContent, showBanner) {
   const rawName = document.getElementById('f-filename').value.trim();
-  if (!rawName) { state.error = 'Il nome del file non può essere vuoto.'; render(); return; }
-  const finalName = rawName.toLowerCase().endsWith('.json')
-    ? rawName.slice(0, -5)
-    : rawName;
+  if (!rawName) { showBanner('error', 'Il nome del file non può essere vuoto.'); return; }
 
+  const finalName = rawName.toLowerCase().endsWith('.json') ? rawName.slice(0, -5) : rawName;
   const commitMsgInput = document.getElementById('f-commit').value.trim();
-  const message = commitMsgInput || `chore: update "${finalName}"`;
-
-  const btn = document.getElementById('btn-save');
-  if (btn) { btn.disabled = true; btn.textContent = 'Salvo…'; }
-
   const rawTitle = document.getElementById('f-title').value.trim();
 
-  try {
+  const btn = document.getElementById('btn-save');
+  btn.disabled = true;
+  btn.textContent = 'Salvo…';
+
+  const result = await attempt(async () => {
     const username = await ensureUsername();
     const { doc } = state.current;
     const cp = doc.core_properties || {};
@@ -320,6 +238,7 @@ async function saveFile(htmlContent) {
     const body = htmlToBody(htmlContent);
     const fullText = bodyToPlainText(body);
     const finalTitle = rawTitle || doc.title || '';
+    const wordCount = fullText.match(/\S+/g)?.length ?? 0;
 
     const newDoc = {
       ...doc,
@@ -327,7 +246,7 @@ async function saveFile(htmlContent) {
       title: finalTitle,
       body,
       full_text: fullText,
-      word_count: fullText.trim() ? fullText.trim().split(/\s+/).filter(Boolean).length : 0,
+      word_count: wordCount,
       core_properties: {
         ...cp,
         last_modified_by: username || cp.last_modified_by || '',
@@ -338,7 +257,6 @@ async function saveFile(htmlContent) {
     };
 
     const base64 = jsonToBase64(newDoc);
-
     const folder = state.current.sha
       ? parentFolderOf(state.current.file.path)
       : (state.currentFolder || state.config.folder);
@@ -347,26 +265,28 @@ async function saveFile(htmlContent) {
 
     if (renaming) {
       if (state.current.sha) {
-        const commitMsg = commitMsgInput || `chore: rinomina "${state.current.file.name}" in "${finalName}"`;
-        const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
-        state.current.sha = newSha;
+        const commitMsg = commitMsgInput || `rinomina "${state.current.file.name}" in "${finalName}"`;
+        const { sha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
+        state.current.sha = sha;
       } else {
-        const createRes = await putFile(state.config, newPath, base64, message, null);
-        state.current.sha = createRes?.content?.sha ?? null;
+        const created = await putFile(state.config, newPath, base64, commitMsgInput || `crea "${finalName}"`, null);
+        state.current.sha = created?.content?.sha ?? null;
       }
       state.current.file = { name: finalName, slug: finalName, path: newPath };
     } else {
+      const message = commitMsgInput || `aggiorna "${finalName}"`;
       const res = await putFile(state.config, newPath, base64, message, state.current.sha);
       state.current.sha = res?.content?.sha ?? state.current.sha;
     }
 
     state.current.doc = newDoc;
-    state.info = `"${finalName}" salvato con successo.`;
-  } catch (e) {
-    state.error = `Salvataggio non riuscito: ${e.message}`;
-  }
+  }, { onError: e => `Salvataggio non riuscito: ${e.message}` });
 
-  render();
+  btn.disabled = false;
+  btn.textContent = 'Salva su GitHub';
+
+  if (result.ok) showBanner('ok', `"${finalName}" salvato con successo.`);
+  else showBanner('error', result.error);
 }
 
 async function boot() {
@@ -378,8 +298,8 @@ async function boot() {
     if (oauthResult) {
       const { token, draft } = oauthResult;
       const cfg = {
-        owner:  draft.owner  || '',
-        repo:   draft.repo   || '',
+        owner: draft.owner || '',
+        repo: draft.repo || '',
         branch: draft.branch || 'main',
         folder: draft.folder || 'docs',
         token,
