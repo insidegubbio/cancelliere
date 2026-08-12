@@ -201,3 +201,29 @@ function runsToPlain(runs) {
   if (!Array.isArray(runs)) return '';
   return runs.map(r => r?.text ?? '').join('');
 }
+
+export function monumentiToBody(monumenti) {
+  if (!Array.isArray(monumenti) || monumenti.length === 0) return [];
+
+  const cell = (text, header = false) => ({
+    runs: [{ text: text || '' }],
+    text: text || '',
+    header,
+  });
+
+  const headerRow = [
+    cell('Nome', true),
+    cell('Percorso', true),
+    cell('Valutazione', true),
+    cell('Dettagli (visitabilità / coordinate / zona / periodo)', true),
+  ];
+
+  const rows = monumenti.map(m => ([
+    cell(m.nome),
+    cell(m.percorso),
+    cell(m.valutazione),
+    cell(m.visitabilita),
+  ]));
+
+  return [{ type: 'table', rows: [headerRow, ...rows] }];
+}
