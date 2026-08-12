@@ -31,12 +31,25 @@ function isJsonLikeName(name) {
   return base.length > 0 && !base.includes('.');
 }
 
+export class GhApiError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.name = 'GhApiError';
+    this.status = status;
+  }
+}
+
 function errorMessage(status, body) {
   const msg = body?.message ?? '';
   if (status === 401) return 'Token non valido o scaduto. Controlla il Personal Access Token.';
   if (status === 404) return `Repository o cartella non trovati (o il token non ha accesso). Dettaglio: ${msg}`;
   if (status === 403) return `Accesso negato dal token. Verifica i permessi (Contents: Read and write). Dettaglio: ${msg}`;
+  if (status === 409) return `Il file è stato modificato altrove (es. da uno script) dopo che l'hai aperto qui. Dettaglio: ${msg}`;
   return `Errore GitHub (${status}): ${msg}`;
+}
+
+function throwGhError(status, body) {
+  throw new GhApiError(status, errorMessage(status, body));
 }
 
 async function safeJson(res) {
@@ -59,7 +72,7 @@ export async function listFolder(cfg, folderPath) {
   const res = await fetch(url, { headers: ghHeaders(cfg.token) });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   const data = await res.json();
   const list = Array.isArray(data) ? data : [];
@@ -75,7 +88,7 @@ export async function fetchFile(cfg, path) {
   const res = await fetch(url, { headers: ghHeaders(cfg.token) });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   const data = await res.json();
   let base64 = data.content;
@@ -102,12 +115,24 @@ export function putFile(cfg, path, base64Content, commitMessage, sha) {
     });
     if (!res.ok) {
       const errBody = await safeJson(res);
-      throw new Error(errorMessage(res.status, errBody));
+      throwGhError(res.status, errBody);
     }
     const data = await res.json();
     invalidateHeadCache(cfg);
     return data;
   });
+}
+
+export async function putFileRetrying(cfg, path, base64Content, commitMessage, sha) {
+  try {
+    const data = await putFile(cfg, path, base64Content, commitMessage, sha);
+    return { data, conflictResolved: false };
+  } catch (e) {
+    if (!(e instanceof GhApiError) || e.status !== 409) throw e;
+    const fresh = await fetchFile(cfg, path);
+    const data = await putFile(cfg, path, base64Content, commitMessage, fresh.sha);
+    return { data, conflictResolved: true };
+  }
 }
 
 export function deleteFile(cfg, path, sha, commitMessage) {
@@ -119,7 +144,7 @@ export function deleteFile(cfg, path, sha, commitMessage) {
     });
     if (!res.ok) {
       const errBody = await safeJson(res);
-      throw new Error(errorMessage(res.status, errBody));
+      throwGhError(res.status, errBody);
     }
     invalidateHeadCache(cfg);
   });
@@ -141,7 +166,7 @@ async function getHeadAndTree(cfg, { forceRefresh = false } = {}) {
   });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   const data = await res.json();
   const result = { headSha: data.sha, treeSha: data.commit.tree.sha, cachedAt: Date.now() };
@@ -157,7 +182,7 @@ async function createBlob(cfg, base64Content) {
   });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   return res.json();
 }
@@ -170,7 +195,7 @@ async function createTree(cfg, baseTreeSha, entries) {
   });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   return res.json();
 }
@@ -183,7 +208,7 @@ async function createCommit(cfg, message, treeSha, parentSha) {
   });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   return res.json();
 }
@@ -196,7 +221,7 @@ async function updateRef(cfg, commitSha) {
   });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   return res.json();
 }
@@ -234,7 +259,7 @@ async function getRecursiveTree(cfg, treeSha) {
   });
   if (!res.ok) {
     const body = await safeJson(res);
-    throw new Error(errorMessage(res.status, body));
+    throwGhError(res.status, body);
   }
   return res.json();
 }
