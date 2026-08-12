@@ -4,7 +4,7 @@ import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
 import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
 import { createEmptyDocument } from './json/defaults.js';
 import { Editor, createTiptapExtensions, TOOLBAR_GROUPS, EDITOR_ACTIONS, TOOLBAR_ACTIVE_CHECKS } from './editor/config.js';
@@ -230,6 +230,7 @@ async function saveFile(htmlContent, showBanner) {
   btn.disabled = true;
   btn.textContent = 'Salvo…';
 
+  let conflictWasResolved = false;
   const result = await attempt(async () => {
     const username = await ensureUsername();
     const { doc } = state.current;
@@ -275,8 +276,9 @@ async function saveFile(htmlContent, showBanner) {
       state.current.file = { name: finalName, slug: finalName, path: newPath };
     } else {
       const message = commitMsgInput || `aggiorna "${finalName}"`;
-      const res = await putFile(state.config, newPath, base64, message, state.current.sha);
+      const { data: res, conflictResolved } = await putFileRetrying(state.config, newPath, base64, message, state.current.sha);
       state.current.sha = res?.content?.sha ?? state.current.sha;
+      conflictWasResolved = conflictResolved;
     }
 
     state.current.doc = newDoc;
@@ -285,8 +287,13 @@ async function saveFile(htmlContent, showBanner) {
   btn.disabled = false;
   btn.textContent = 'Salva su GitHub';
 
-  if (result.ok) showBanner('ok', `"${finalName}" salvato con successo.`);
-  else showBanner('error', result.error);
+  if (result.ok) {
+    showBanner('ok', conflictWasResolved
+      ? `"${finalName}" salvato con successo (il file era stato modificato altrove nel frattempo: la tua versione ha sovrascritto quella più recente).`
+      : `"${finalName}" salvato con successo.`);
+  } else {
+    showBanner('error', result.error);
+  }
 }
 
 async function boot() {
