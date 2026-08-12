@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, bytesToBase64 } from '../api/github.js';
+import { listFolder, renameAndUpdateFileAtomic, commitFilesAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, bytesToBase64 } from '../api/github.js';
 import { loadCategoriesIndex, saveCategoriesIndex } from '../api/categories.js';
 import { state } from '../state.js';
 
@@ -554,14 +554,6 @@ function categoriesIndexRemoveArticle(categorySlug, slug) {
   cat.articles = (cat.articles || []).filter(a => a.slug !== slug);
 }
 
-function categoriesIndexRenameArticle(categorySlug, oldSlug, newSlug) {
-  if (!state.categoriesIndex) return;
-  const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
-  if (!cat) return;
-  const a = (cat.articles || []).find(x => x.slug === oldSlug);
-  if (a) a.slug = newSlug;
-}
-
 export function parentFolderOf(path) {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? '' : path.slice(0, idx);
@@ -638,11 +630,39 @@ async function renameFile(file, newName, rowEl, render) {
     } catch (_) {
       base64 = bytesToBase64(bytes);
     }
-    await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: rinomina "${currentSlug}" in "${newName}"`);
-    if (file.categorySlug) {
-      categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
-      await persistCategoriesIndex(`chore: aggiorna indice dopo rinomina "${currentSlug}" -> "${newName}"`);
+    const commitMessage = `chore: rinomina "${currentSlug}" in "${newName}"`;
+
+    if (file.categorySlug && state.categoriesIndex && state.categoriesPath) {
+      // Costruisco l'indice aggiornato SENZA ancora mutare lo state: se il
+      // commit fallisce, state.categoriesIndex deve restare quello vecchio.
+      const updatedIndex = state.categoriesIndex.map(c => {
+        if (c.slug !== file.categorySlug) return c;
+        return {
+          ...c,
+          articles: (c.articles || []).map(a => a.slug === currentSlug ? { ...a, slug: newName } : a),
+        };
+      });
+      const categoriesBase64 = bytesToBase64(
+        new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2))
+      );
+
+      // Un solo commit: rinomina del file + aggiornamento categories.json.
+      await commitFilesAtomic(state.config, [
+        { path: newPath, base64Content: base64 },
+        { path: file.path, delete: true },
+        { path: state.categoriesPath, base64Content: categoriesBase64 },
+      ], commitMessage);
+
+      state.categoriesIndex = updatedIndex;
+      // Lo sha "vecchio" di categories.json (usato altrove per la Contents
+      // API) non è più valido dopo questo commit basato su Git Data API;
+      // lo invalido così un prossimo salvataggio via saveCategoriesIndex
+      // rileggerà lo sha corretto invece di fallire con 409.
+      state.categoriesSha = null;
+    } else {
+      await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, commitMessage);
     }
+
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
   } catch (e) {
