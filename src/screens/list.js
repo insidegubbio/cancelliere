@@ -528,6 +528,9 @@ function applyVirtualFolder() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+// Aggiorna in memoria l'indice categorie dopo create/rename/delete, così la
+// vista resta coerente in questa sessione. Non riscrive il file indice su
+// GitHub.
 function categoriesIndexAddArticle(categorySlug, article) {
   if (!state.categoriesIndex) return;
   const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
@@ -594,6 +597,16 @@ async function ensureFileSha(file) {
   return sha;
 }
 
+async function recoverStaleList(render) {
+  state.categoriesIndex = null;
+  state.categoriesPath = null;
+  await refreshList(render);
+}
+
+function staleItemMessage(label) {
+  return `"${label}" non esiste più a questo percorso: probabilmente è stato rinominato, spostato o eliminato da un altro utente nel frattempo. La lista è stata aggiornata.`;
+}
+
 async function renameFile(file, newName, rowEl, render) {
   if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
   const currentSlug = file.slug || file.name;
@@ -621,7 +634,15 @@ async function renameFile(file, newName, rowEl, render) {
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
   } catch (e) {
-    state.error = `Rinomina non riuscita: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(currentSlug);
+    } else {
+      state.error = `Rinomina non riuscita: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
@@ -638,7 +659,15 @@ async function deleteFileAction(file, rowEl, render) {
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
   } catch (e) {
-    state.error = `Eliminazione non riuscita: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(file.name);
+    } else {
+      state.error = `Eliminazione non riuscita: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
@@ -655,15 +684,21 @@ async function moveFile(file, destFolder, render) {
   render();
 
   try {
-    const { renameAndUpdateFileAtomic } = await import('../api/github.js');
-    const { fetchFile, bytesToBase64 } = await import('../api/github.js');
     const { bytes } = await fetchFile(state.config, file.path);
     const base64 = bytesToBase64(bytes);
     await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: sposta "${file.name}" in "${destFolder}"`);
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" spostato in "${destFolder}".`;
   } catch (e) {
-    state.error = `Spostamento non riuscito: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(file.name);
+    } else {
+      state.error = `Spostamento non riuscito: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
@@ -684,7 +719,15 @@ async function renameFolder(dir, newName, rowEl, render) {
     replaceDirEverywhere(dir.path, { ...dir, name: newName, path: newPath });
     state.info = `Cartella "${dir.name}" rinominata in "${newName}".`;
   } catch (e) {
-    state.error = `Rinomina cartella non riuscita: ${e.message}`;
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(dir.name);
+    } else {
+      state.error = `Rinomina cartella non riuscita: ${e.message}`;
+    }
+    render();
+    return;
   }
   state.actionBusy = false;
   render();
