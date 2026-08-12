@@ -313,6 +313,30 @@ export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, 
   });
 }
 
+// changes: array di
+//   { path, base64Content }   -> crea/aggiorna il file a quel path
+//   { path, delete: true }    -> rimuove il file a quel path
+// Tutte le modifiche finiscono in un solo albero/commit (una sola entry in
+// git log), usando lo stesso meccanismo di retry-su-conflitto già usato da
+// renameFileAtomic/renameFolderAtomic.
+export function commitFilesAtomic(cfg, changes, commitMessage) {
+  return enqueueWrite(async () => {
+    const commit = await commitTreeChange(cfg, async () => {
+      const entries = [];
+      for (const change of changes) {
+        if (change.delete) {
+          entries.push({ path: change.path, mode: '100644', type: 'blob', sha: null });
+        } else {
+          const blob = await createBlob(cfg, change.base64Content);
+          entries.push({ path: change.path, mode: '100644', type: 'blob', sha: blob.sha });
+        }
+      }
+      return entries;
+    }, commitMessage);
+    return { commit };
+  });
+}
+
 export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async (treeSha) => {
