@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile } from '../api/github.js';
+import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, bytesToBase64 } from '../api/github.js';
 import { loadCategoriesIndex } from '../api/categories.js';
 import { state } from '../state.js';
 
@@ -528,9 +528,6 @@ function applyVirtualFolder() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// Aggiorna in memoria l'indice categorie dopo create/rename/delete, così la
-// vista resta coerente in questa sessione. Non riscrive il file indice su
-// GitHub.
 function categoriesIndexAddArticle(categorySlug, article) {
   if (!state.categoriesIndex) return;
   const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
@@ -610,8 +607,16 @@ async function renameFile(file, newName, rowEl, render) {
   render();
 
   try {
-    const sha = await ensureFileSha(file);
-    await renameFileAtomic(state.config, file.path, newPath, sha, `chore: rinomina "${currentSlug}" in "${newName}"`);
+    const { bytes } = await fetchFile(state.config, file.path);
+    let base64;
+    try {
+      const doc = JSON.parse(new TextDecoder().decode(bytes));
+      doc.slug = newName;
+      base64 = bytesToBase64(new TextEncoder().encode(JSON.stringify(doc, null, 2)));
+    } catch (_) {
+      base64 = bytesToBase64(bytes);
+    }
+    await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: rinomina "${currentSlug}" in "${newName}"`);
     if (file.categorySlug) categoriesIndexRenameArticle(file.categorySlug, currentSlug, newName);
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
