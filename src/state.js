@@ -16,6 +16,7 @@ export const state = {
 
   categoriesIndex: null,
   categoriesPath: null,
+  categoriesSha: null,
 
   searchQuery: '',
 
