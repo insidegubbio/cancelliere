@@ -103,11 +103,6 @@ function onNewFile() {
   if (!name) return;
 
   const slug = name.toLowerCase().replace(/\s+/g, '-');
-
-  // Le cartelle con prefisso "cat:" sono categorie virtuali ricostruite
-  // dall'indice categories.json e non sono percorsi reali su GitHub: i
-  // documenti vanno sempre salvati "piatti" dentro la cartella reale
-  // (state.config.folder, es. "public/articles"), mai dentro "cat:...".
   const usingVirtual = !!state.categoriesIndex;
   const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
   const categorySlug = insideCategory ? state.currentFolder.slice(4) : null;
