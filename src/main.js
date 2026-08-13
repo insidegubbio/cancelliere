@@ -4,7 +4,7 @@ import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, commitFilesAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
 import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
 import { createEmptyDocument } from './json/defaults.js';
 import { Editor, createTiptapExtensions, TOOLBAR_GROUPS, EDITOR_ACTIONS, TOOLBAR_ACTIVE_CHECKS } from './editor/config.js';
@@ -103,13 +103,26 @@ function onNewFile() {
   if (!name) return;
 
   const slug = name.toLowerCase().replace(/\s+/g, '-');
-  const folder = state.currentFolder || state.config.folder;
-  const category = folder.split('/').pop();
+  const usingVirtual = !!state.categoriesIndex;
+  const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
+  const categorySlug = insideCategory ? state.currentFolder.slice(4) : null;
+
+  const folder = usingVirtual ? state.config.folder : (state.currentFolder || state.config.folder);
+  const category = categorySlug || folder.split('/').pop();
+  const categoryEntry = categorySlug ? (state.categoriesIndex || []).find(c => c.slug === categorySlug) : null;
+
+  const doc = createEmptyDocument(slug, category);
+  if (categoryEntry?.name) doc.category_name = categoryEntry.name;
 
   state.current = {
-    file: { name: slug, slug, path: `${folder}/${slug}` },
+    file: {
+      name: slug,
+      slug,
+      path: `${folder}/${slug}`,
+      ...(categorySlug ? { categorySlug } : {}),
+    },
     sha: null,
-    doc: createEmptyDocument(slug, category),
+    doc,
   };
   state.screen = 'editor';
   render();
@@ -272,13 +285,55 @@ async function saveFile(htmlContent, showBanner) {
     };
 
     const base64 = jsonToBase64(newDoc);
+    const usingVirtual = !!state.categoriesIndex;
     const folder = state.current.sha
       ? parentFolderOf(state.current.file.path)
-      : (state.currentFolder || state.config.folder);
+      : (usingVirtual ? state.config.folder : (state.currentFolder || state.config.folder));
     const newPath = `${folder}/${finalName}`;
     const renaming = newPath !== state.current.file.path;
+    const categorySlug = state.current.file.categorySlug || null;
+    const oldSlug = state.current.file.slug || state.current.file.name;
 
-    if (renaming) {
+    if (categorySlug && state.categoriesIndex && state.categoriesPath) {
+      const updatedIndex = state.categoriesIndex.map(c => {
+        if (c.slug !== categorySlug) return c;
+        const article = {
+          slug: finalName,
+          title: finalTitle,
+          summary: newDoc.summary || '',
+          category: categorySlug,
+          word_count: wordCount,
+        };
+        const articles = (c.articles || []).filter(a => a.slug !== oldSlug && a.slug !== finalName);
+        return { ...c, articles: [...articles, article] };
+      });
+      const categoriesBase64 = bytesToBase64(
+        new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2))
+      );
+
+      const changes = [{ path: newPath, base64Content: base64 }];
+      if (renaming && state.current.sha) {
+        changes.push({ path: state.current.file.path, delete: true });
+      }
+      changes.push({ path: state.categoriesPath, base64Content: categoriesBase64 });
+
+      const commitMsg = commitMsgInput
+        || (state.current.sha
+          ? (renaming ? `rinomina "${oldSlug}" in "${finalName}"` : `aggiorna "${finalName}"`)
+          : `crea "${finalName}"`);
+
+      await commitFilesAtomic(state.config, changes, commitMsg);
+
+      state.current.file = { name: finalName, slug: finalName, path: newPath, categorySlug };
+      state.categoriesIndex = updatedIndex;
+      state.categoriesSha = null;
+      try {
+        const { sha } = await fetchFile(state.config, newPath);
+        state.current.sha = sha;
+      } catch (_) {
+        state.current.sha = null;
+      }
+    } else if (renaming) {
       if (state.current.sha) {
         const commitMsg = commitMsgInput || `rinomina "${state.current.file.name}" in "${finalName}"`;
         const { sha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);

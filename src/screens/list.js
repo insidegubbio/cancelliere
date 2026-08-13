@@ -633,8 +633,6 @@ async function renameFile(file, newName, rowEl, render) {
     const commitMessage = `chore: rinomina "${currentSlug}" in "${newName}"`;
 
     if (file.categorySlug && state.categoriesIndex && state.categoriesPath) {
-      // Costruisco l'indice aggiornato SENZA ancora mutare lo state: se il
-      // commit fallisce, state.categoriesIndex deve restare quello vecchio.
       const updatedIndex = state.categoriesIndex.map(c => {
         if (c.slug !== file.categorySlug) return c;
         return {
@@ -646,7 +644,6 @@ async function renameFile(file, newName, rowEl, render) {
         new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2))
       );
 
-      // Un solo commit: rinomina del file + aggiornamento categories.json.
       await commitFilesAtomic(state.config, [
         { path: newPath, base64Content: base64 },
         { path: file.path, delete: true },
@@ -654,10 +651,6 @@ async function renameFile(file, newName, rowEl, render) {
       ], commitMessage);
 
       state.categoriesIndex = updatedIndex;
-      // Lo sha "vecchio" di categories.json (usato altrove per la Contents
-      // API) non è più valido dopo questo commit basato su Git Data API;
-      // lo invalido così un prossimo salvataggio via saveCategoriesIndex
-      // rileggerà lo sha corretto invece di fallire con 409.
       state.categoriesSha = null;
     } else {
       await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, commitMessage);
@@ -768,4 +761,4 @@ async function renameFolder(dir, newName, rowEl, render) {
   render();
 }
 
-export { categoriesIndexAddArticle };
+export { categoriesIndexAddArticle, persistCategoriesIndex };
