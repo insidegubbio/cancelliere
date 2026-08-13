@@ -147,7 +147,7 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
     : `<footer class="note">I file sono salvati come slug senza estensione nel repository GitHub.</footer>`));
 
   top.querySelector('#btn-settings').addEventListener('click', onSettings);
-  actionsBar.querySelector('#btn-refresh').addEventListener('click', () => refreshList(render));
+  actionsBar.querySelector('#btn-refresh').addEventListener('click', () => refreshList(render, { forceReload: true }));
   const newFolderBtn = pageHeader.querySelector('#btn-new-folder');
   if (newFolderBtn) newFolderBtn.addEventListener('click', onNewFolder);
   const newFileBtn = pageHeader.querySelector('#btn-new');
@@ -299,7 +299,7 @@ function buildFileRow(f, render, onOpenFile) {
   const actions = el(`
     <div class="file-row-actions">
       <button class="btn-icon btn-rename" title="Rinomina file">${iconSvg('pencil')}</button>
-      ${virtualMode ? '' : `<button class="btn-icon btn-move" title="Sposta">${iconSvg('move')}</button>`}
+      <button class="btn-icon btn-move" title="Sposta">${iconSvg('move')}</button>
       <button class="btn-icon btn-icon-danger btn-delete" title="Elimina">${iconSvg('trash')}</button>
     </div>
   `);
@@ -354,7 +354,8 @@ function buildFileRow(f, render, onOpenFile) {
     }
 
     if (m === 'move') {
-      showMoveDialog(f, render);
+      if (virtualMode) showMoveCategoryDialog(f, render);
+      else showMoveDialog(f, render);
       mode = 'idle';
     }
   };
@@ -473,15 +474,63 @@ function showMoveDialog(file, render) {
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
+function showMoveCategoryDialog(file, render) {
+  const cats = (state.categoriesIndex || []).filter(c => c.slug !== file.categorySlug);
+
+  const overlay = el(`<div class="dialog-overlay"></div>`);
+  const box = el(`
+    <div class="dialog-box">
+      <h2 class="dialog-title">Sposta &ldquo;${escapeHtml(file.name)}&rdquo;</h2>
+      <p style="font-size:13px;color:var(--muted-foreground);margin:0 0 14px">Scegli la categoria di destinazione:</p>
+      <div id="move-dir-list" style="border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;max-height:220px;overflow-y:auto"></div>
+      <div class="dialog-footer">
+        <button class="btn-outline" id="move-cancel">Annulla</button>
+      </div>
+    </div>
+  `);
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+
+  const list = box.querySelector('#move-dir-list');
+
+  if (!cats.length) {
+    list.innerHTML = `<div style="padding:16px;text-align:center;font-size:13px;color:var(--muted-foreground)">Nessuna altra categoria disponibile.</div>`;
+  } else {
+    cats.forEach(cat => {
+      const btn = el(`
+        <button style="display:flex;align-items:center;gap:10px;width:100%;padding:10px 14px;border:none;border-bottom:1px solid var(--border);background:none;font-family:inherit;font-size:14px;cursor:pointer;color:var(--foreground);text-align:left;transition:background .1s">
+          ${iconSvg('folder')} ${escapeHtml(cat.name)}
+        </button>
+      `);
+      btn.addEventListener('mouseenter', () => btn.style.background = 'var(--muted)');
+      btn.addEventListener('mouseleave', () => btn.style.background = '');
+      btn.addEventListener('click', () => {
+        overlay.remove();
+        moveFileToCategory(file, cat.slug, render);
+      });
+      list.appendChild(btn);
+    });
+    if (list.lastChild) list.lastChild.style.borderBottom = 'none';
+  }
+
+  box.querySelector('#move-cancel').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
 let refreshSeq = 0;
 
-export async function refreshList(render) {
+export async function refreshList(render, { forceReload = false } = {}) {
   const seq = ++refreshSeq;
   state.busy = true;
   state.error = null;
   state.info = null;
   render();
   try {
+    if (forceReload) {
+      state.categoriesIndex = null;
+      state.categoriesPath = null;
+      state.categoriesSha = null;
+    }
     if (state.categoriesIndex === null) {
       const idx = await loadCategoriesIndex(state.config);
       if (seq !== refreshSeq) return;
@@ -717,6 +766,77 @@ async function moveFile(file, destFolder, render) {
     await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, `chore: sposta "${file.name}" in "${destFolder}"`);
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" spostato in "${destFolder}".`;
+  } catch (e) {
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(file.name);
+    } else {
+      state.error = `Spostamento non riuscito: ${e.message}`;
+    }
+    render();
+    return;
+  }
+  state.actionBusy = false;
+  render();
+}
+
+async function moveFileToCategory(file, destSlug, render) {
+  if (state.actionBusy) return;
+  if (!state.categoriesIndex || !state.categoriesPath) return;
+  if (destSlug === file.categorySlug) return;
+
+  const destCat = state.categoriesIndex.find(c => c.slug === destSlug);
+  if (!destCat) return;
+
+  const slug = file.slug || file.name;
+
+  state.actionBusy = true;
+  state.error = null;
+  state.info = null;
+  render();
+
+  try {
+    const { bytes } = await fetchFile(state.config, file.path);
+    let base64;
+    let article;
+    try {
+      const doc = JSON.parse(new TextDecoder().decode(bytes));
+      doc.category = destSlug;
+      doc.category_name = destCat.name || '';
+      base64 = bytesToBase64(new TextEncoder().encode(JSON.stringify(doc, null, 2)));
+      article = {
+        slug,
+        title: doc.title || file.name,
+        summary: doc.summary || '',
+        category: destSlug,
+        word_count: doc.word_count || 0,
+      };
+    } catch (_) {
+      base64 = bytesToBase64(bytes);
+      article = { slug, title: file.name, summary: '', category: destSlug, word_count: 0 };
+    }
+
+    const updatedIndex = state.categoriesIndex.map(c => {
+      if (c.slug === file.categorySlug) {
+        return { ...c, articles: (c.articles || []).filter(a => a.slug !== slug) };
+      }
+      if (c.slug === destSlug) {
+        return { ...c, articles: [...(c.articles || []).filter(a => a.slug !== slug), article] };
+      }
+      return c;
+    });
+    const categoriesBase64 = bytesToBase64(new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2)));
+
+    await commitFilesAtomic(state.config, [
+      { path: file.path, base64Content: base64 },
+      { path: state.categoriesPath, base64Content: categoriesBase64 },
+    ], `chore: sposta "${file.name}" nella categoria "${destCat.name}"`);
+
+    state.categoriesIndex = updatedIndex;
+    state.categoriesSha = null;
+    removeFileEverywhere(file.path);
+    state.info = `"${file.name}" spostato nella categoria "${destCat.name}".`;
   } catch (e) {
     state.actionBusy = false;
     if (e.status === 404) {
