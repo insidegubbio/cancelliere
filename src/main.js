@@ -2,7 +2,7 @@ import { state } from './state.js';
 import { loadConfig, saveConfig } from './api/storage.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
-import { renderList, refreshList, parentFolderOf } from './screens/list.js';
+import { renderList, refreshList, parentFolderOf, categoriesIndexAddArticle, persistCategoriesIndex } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
 import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
 import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
@@ -103,13 +103,27 @@ function onNewFile() {
   if (!name) return;
 
   const slug = name.toLowerCase().replace(/\s+/g, '-');
-  const folder = state.currentFolder || state.config.folder;
-  const category = folder.split('/').pop();
+
+  const usingVirtual = !!state.categoriesIndex;
+  const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
+  const categorySlug = insideCategory ? state.currentFolder.slice(4) : null;
+
+  const folder = usingVirtual ? state.config.folder : (state.currentFolder || state.config.folder);
+  const category = categorySlug || folder.split('/').pop();
+  const categoryEntry = categorySlug ? (state.categoriesIndex || []).find(c => c.slug === categorySlug) : null;
+
+  const doc = createEmptyDocument(slug, category);
+  if (categoryEntry?.name) doc.category_name = categoryEntry.name;
 
   state.current = {
-    file: { name: slug, slug, path: `${folder}/${slug}` },
+    file: {
+      name: slug,
+      slug,
+      path: `${folder}/${slug}`,
+      ...(categorySlug ? { categorySlug } : {}),
+    },
     sha: null,
-    doc: createEmptyDocument(slug, category),
+    doc,
   };
   state.screen = 'editor';
   render();
@@ -272,11 +286,13 @@ async function saveFile(htmlContent, showBanner) {
     };
 
     const base64 = jsonToBase64(newDoc);
+    const usingVirtual = !!state.categoriesIndex;
     const folder = state.current.sha
       ? parentFolderOf(state.current.file.path)
-      : (state.currentFolder || state.config.folder);
+      : (usingVirtual ? state.config.folder : (state.currentFolder || state.config.folder));
     const newPath = `${folder}/${finalName}`;
     const renaming = newPath !== state.current.file.path;
+    const categorySlug = state.current.file.categorySlug || null;
 
     if (renaming) {
       if (state.current.sha) {
@@ -287,7 +303,7 @@ async function saveFile(htmlContent, showBanner) {
         const created = await putFile(state.config, newPath, base64, commitMsgInput || `crea "${finalName}"`, null);
         state.current.sha = created?.content?.sha ?? null;
       }
-      state.current.file = { name: finalName, slug: finalName, path: newPath };
+      state.current.file = { name: finalName, slug: finalName, path: newPath, ...(categorySlug ? { categorySlug } : {}) };
     } else {
       const message = commitMsgInput || `aggiorna "${finalName}"`;
       const { data: res, conflictResolved } = await putFileRetrying(state.config, newPath, base64, message, state.current.sha);
@@ -296,6 +312,17 @@ async function saveFile(htmlContent, showBanner) {
     }
 
     state.current.doc = newDoc;
+
+    if (categorySlug && state.categoriesIndex) {
+      categoriesIndexAddArticle(categorySlug, {
+        slug: finalName,
+        title: finalTitle,
+        summary: newDoc.summary || '',
+        category: categorySlug,
+        word_count: wordCount,
+      });
+      await persistCategoriesIndex(commitMsgInput || `chore: aggiorna indice categorie per "${finalName}"`);
+    }
   }, { onError: e => `Salvataggio non riuscito: ${e.message}` });
 
   btn.disabled = false;
