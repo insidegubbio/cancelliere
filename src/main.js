@@ -2,9 +2,9 @@ import { state } from './state.js';
 import { loadConfig, saveConfig } from './api/storage.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
-import { renderList, refreshList, parentFolderOf, categoriesIndexAddArticle, persistCategoriesIndex } from './screens/list.js';
+import { renderList, refreshList, parentFolderOf } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, commitFilesAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
 import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
 import { createEmptyDocument } from './json/defaults.js';
 import { Editor, createTiptapExtensions, TOOLBAR_GROUPS, EDITOR_ACTIONS, TOOLBAR_ACTIVE_CHECKS } from './editor/config.js';
@@ -104,6 +104,10 @@ function onNewFile() {
 
   const slug = name.toLowerCase().replace(/\s+/g, '-');
 
+  // Le cartelle con prefisso "cat:" sono categorie virtuali ricostruite
+  // dall'indice categories.json e non sono percorsi reali su GitHub: i
+  // documenti vanno sempre salvati "piatti" dentro la cartella reale
+  // (state.config.folder, es. "public/articles"), mai dentro "cat:...".
   const usingVirtual = !!state.categoriesIndex;
   const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
   const categorySlug = insideCategory ? state.currentFolder.slice(4) : null;
@@ -293,8 +297,48 @@ async function saveFile(htmlContent, showBanner) {
     const newPath = `${folder}/${finalName}`;
     const renaming = newPath !== state.current.file.path;
     const categorySlug = state.current.file.categorySlug || null;
+    const oldSlug = state.current.file.slug || state.current.file.name;
 
-    if (renaming) {
+    if (categorySlug && state.categoriesIndex && state.categoriesPath) {
+      const updatedIndex = state.categoriesIndex.map(c => {
+        if (c.slug !== categorySlug) return c;
+        const article = {
+          slug: finalName,
+          title: finalTitle,
+          summary: newDoc.summary || '',
+          category: categorySlug,
+          word_count: wordCount,
+        };
+        const articles = (c.articles || []).filter(a => a.slug !== oldSlug && a.slug !== finalName);
+        return { ...c, articles: [...articles, article] };
+      });
+      const categoriesBase64 = bytesToBase64(
+        new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2))
+      );
+
+      const changes = [{ path: newPath, base64Content: base64 }];
+      if (renaming && state.current.sha) {
+        changes.push({ path: state.current.file.path, delete: true });
+      }
+      changes.push({ path: state.categoriesPath, base64Content: categoriesBase64 });
+
+      const commitMsg = commitMsgInput
+        || (state.current.sha
+          ? (renaming ? `rinomina "${oldSlug}" in "${finalName}"` : `aggiorna "${finalName}"`)
+          : `crea "${finalName}"`);
+
+      await commitFilesAtomic(state.config, changes, commitMsg);
+
+      state.current.file = { name: finalName, slug: finalName, path: newPath, categorySlug };
+      state.categoriesIndex = updatedIndex;
+      state.categoriesSha = null;
+      try {
+        const { sha } = await fetchFile(state.config, newPath);
+        state.current.sha = sha;
+      } catch (_) {
+        state.current.sha = null;
+      }
+    } else if (renaming) {
       if (state.current.sha) {
         const commitMsg = commitMsgInput || `rinomina "${state.current.file.name}" in "${finalName}"`;
         const { sha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
@@ -303,7 +347,7 @@ async function saveFile(htmlContent, showBanner) {
         const created = await putFile(state.config, newPath, base64, commitMsgInput || `crea "${finalName}"`, null);
         state.current.sha = created?.content?.sha ?? null;
       }
-      state.current.file = { name: finalName, slug: finalName, path: newPath, ...(categorySlug ? { categorySlug } : {}) };
+      state.current.file = { name: finalName, slug: finalName, path: newPath };
     } else {
       const message = commitMsgInput || `aggiorna "${finalName}"`;
       const { data: res, conflictResolved } = await putFileRetrying(state.config, newPath, base64, message, state.current.sha);
@@ -312,17 +356,6 @@ async function saveFile(htmlContent, showBanner) {
     }
 
     state.current.doc = newDoc;
-
-    if (categorySlug && state.categoriesIndex) {
-      categoriesIndexAddArticle(categorySlug, {
-        slug: finalName,
-        title: finalTitle,
-        summary: newDoc.summary || '',
-        category: categorySlug,
-        word_count: wordCount,
-      });
-      await persistCategoriesIndex(commitMsgInput || `chore: aggiorna indice categorie per "${finalName}"`);
-    }
   }, { onError: e => `Salvataggio non riuscito: ${e.message}` });
 
   btn.disabled = false;
