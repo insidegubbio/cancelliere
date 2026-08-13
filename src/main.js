@@ -1,5 +1,6 @@
 import { state } from './state.js';
 import { loadConfig, saveConfig } from './api/storage.js';
+import { saveCategoriesIndex } from './api/categories.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf } from './screens/list.js';
@@ -136,6 +137,13 @@ function onNewFile() {
 }
 
 async function onNewFolder() {
+  const usingVirtual = !!state.categoriesIndex;
+  const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
+
+  if (usingVirtual && !insideCategory) {
+    return onNewCategory();
+  }
+
   const name = prompt('Nome della nuova cartella:')?.trim();
   if (!name) return;
 
@@ -154,6 +162,37 @@ async function onNewFolder() {
 
   state.actionBusy = false;
   if (result.ok) state.info = `Cartella "${name}" creata.`;
+  else state.error = result.error;
+  render();
+}
+
+async function onNewCategory() {
+  const name = prompt('Nome della nuova categoria:')?.trim();
+  if (!name) return;
+
+  const slug = name.toLowerCase().replace(/\s+/g, '-');
+  if (state.categoriesIndex.some(c => c.slug === slug)) {
+    state.error = `Esiste già una categoria "${name}".`;
+    render();
+    return;
+  }
+
+  state.actionBusy = true;
+  state.error = null;
+  state.info = null;
+  render();
+
+  const result = await attempt(async () => {
+    const updatedIndex = [...state.categoriesIndex, { slug, name, articles: [] }];
+    state.categoriesSha = await saveCategoriesIndex(
+      state.config, state.categoriesPath, updatedIndex, state.categoriesSha, `nuova categoria "${name}"`
+    );
+    state.categoriesIndex = updatedIndex;
+    state.dirs = [...state.dirs, { name, path: `cat:${slug}`, slug, virtual: true }].sort((a, b) => a.name.localeCompare(b.name));
+  }, { onError: e => `Impossibile creare la categoria: ${e.message}` });
+
+  state.actionBusy = false;
+  if (result.ok) state.info = `Categoria "${name}" creata.`;
   else state.error = result.error;
   render();
 }
