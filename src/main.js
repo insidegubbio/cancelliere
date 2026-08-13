@@ -75,6 +75,12 @@ async function onOpenFile(file) {
       doc.body = monumentiToBody(doc.monumenti);
     }
 
+    try {
+      bodyToHtml(doc.body);
+    } catch (err) {
+      throw new Error(`il contenuto non è nel formato atteso e non può essere aperto nell'editor (${err.message}).`);
+    }
+
     state.current = { file, sha, doc };
   }, {
     onError: e => e.status === 404
@@ -103,6 +109,7 @@ function onNewFile() {
   if (!name) return;
 
   const slug = name.toLowerCase().replace(/\s+/g, '-');
+
   const usingVirtual = !!state.categoriesIndex;
   const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
   const categorySlug = insideCategory ? state.currentFolder.slice(4) : null;

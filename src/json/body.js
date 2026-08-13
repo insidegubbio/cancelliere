@@ -14,6 +14,20 @@ function levelFromStyle(style) {
   return WORD_STYLE_TO_LEVEL[String(style).toLowerCase()] || null;
 }
 
+function normalizeTableRows(rows) {
+  return (Array.isArray(rows) ? rows : []).map(row => {
+    if (Array.isArray(row)) return row;
+    if (row && Array.isArray(row.cells)) return row.cells;
+    return [];
+  });
+}
+
+function cellRunsFromContent(content) {
+  return (Array.isArray(content) ? content : [])
+    .map(p => Array.isArray(p?.runs) && p.runs.length ? p.runs : (p?.text ? [{ text: p.text }] : []))
+    .filter(runs => runs.length);
+}
+
 export function bodyToHtml(body) {
   if (!Array.isArray(body) || body.length === 0) return '<p></p>';
 
@@ -31,11 +45,15 @@ export function bodyToHtml(body) {
   body.forEach(block => {
     if (block?.type === 'table') {
       flushList();
-      const rows = Array.isArray(block.rows) ? block.rows : [];
+      const rows = normalizeTableRows(block.rows);
       const rowsHtml = rows.map((row, ri) => {
         const cellsHtml = (row || []).map(cell => {
           const isHeader = cell?.header ?? (ri === 0);
           const tag = isHeader ? 'th' : 'td';
+          if (Array.isArray(cell?.content)) {
+            const paragraphsHtml = cellRunsFromContent(cell.content).map(runs => runsToHtml(runs)).filter(Boolean);
+            return `<${tag}>${paragraphsHtml.join('<br>')}</${tag}>`;
+          }
           const runs = cell?.runs || (cell?.text != null ? [{ text: cell.text }] : []);
           return `<${tag}>${runsToHtml(runs)}</${tag}>`;
         }).join('');
@@ -186,8 +204,14 @@ export function bodyToPlainText(body) {
   return body
     .map(block => {
       if (block?.type === 'table') {
-        return (block.rows || [])
-          .map(row => (row || []).map(cell => cell?.text ?? runsToPlain(cell?.runs)).join(' \t '))
+        const rows = normalizeTableRows(block.rows);
+        return rows
+          .map(row => (row || []).map(cell => {
+            if (Array.isArray(cell?.content)) {
+              return cellRunsFromContent(cell.content).map(runs => runsToPlain(runs)).filter(Boolean).join(' ');
+            }
+            return cell?.text ?? runsToPlain(cell?.runs);
+          }).join(' \t '))
           .join('\n');
       }
       if (typeof block?.text === 'string' && block.text) return block.text;
