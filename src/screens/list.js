@@ -581,6 +581,13 @@ function applyVirtualFolder() {
 async function persistCategoriesIndex(commitMessage) {
   if (!state.categoriesIndex || !state.categoriesPath) return;
   try {
+    if (!state.categoriesSha) {
+      try {
+        const { sha } = await fetchFile(state.config, state.categoriesPath);
+        state.categoriesSha = sha;
+      } catch (_) {
+      }
+    }
     state.categoriesSha = await saveCategoriesIndex(
       state.config, state.categoriesPath, state.categoriesIndex, state.categoriesSha, commitMessage
     );
