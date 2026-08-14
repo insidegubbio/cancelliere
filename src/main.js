@@ -1,11 +1,11 @@
 import { state } from './state.js';
 import { loadConfig, saveConfig } from './api/storage.js';
-import { saveCategoriesIndex } from './api/categories.js';
+import { updateVirtualIndexEntry, renameVirtualIndexEntry } from './api/virtualIndex.js';
 import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
-import { renderList, refreshList, parentFolderOf } from './screens/list.js';
+import { renderList, refreshList, parentFolderOf, categoriesIndexUpsertArticle, categoriesIndexRemoveArticle } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, commitFilesAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
 import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
 import { createEmptyDocument } from './json/defaults.js';
 import { Editor, createTiptapExtensions, TOOLBAR_GROUPS, EDITOR_ACTIONS, TOOLBAR_ACTIVE_CHECKS } from './editor/config.js';
@@ -95,7 +95,6 @@ async function onOpenFile(file) {
     render();
   } else if (result.error.includes('non esiste più a questo percorso')) {
     state.categoriesIndex = null;
-    state.categoriesPath = null;
     await refreshList(render);
     state.error = result.error;
     render();
@@ -166,7 +165,7 @@ async function onNewFolder() {
   render();
 }
 
-async function onNewCategory() {
+function onNewCategory() {
   const name = prompt('Nome della nuova categoria:')?.trim();
   if (!name) return;
 
@@ -177,23 +176,11 @@ async function onNewCategory() {
     return;
   }
 
-  state.actionBusy = true;
-  state.error = null;
-  state.info = null;
-  render();
-
-  const result = await attempt(async () => {
-    const updatedIndex = [...state.categoriesIndex, { slug, name, articles: [] }];
-    state.categoriesSha = await saveCategoriesIndex(
-      state.config, state.categoriesPath, updatedIndex, state.categoriesSha, `nuova categoria "${name}"`
-    );
-    state.categoriesIndex = updatedIndex;
-    state.dirs = [...state.dirs, { name, path: `cat:${slug}`, slug, virtual: true }].sort((a, b) => a.name.localeCompare(b.name));
-  }, { onError: e => `Impossibile creare la categoria: ${e.message}` });
-
-  state.actionBusy = false;
-  if (result.ok) state.info = `Categoria "${name}" creata.`;
-  else state.error = result.error;
+  state.categoriesIndex = [...state.categoriesIndex, { slug, name, articles: [] }]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  state.dirs = [...state.dirs, { name, path: `cat:${slug}`, slug, virtual: true }]
+    .sort((a, b) => a.name.localeCompare(b.name));
+  state.info = `Categoria "${name}" creata: diventa definitiva salvando il primo documento al suo interno.`;
   render();
 }
 
@@ -340,62 +327,51 @@ async function saveFile(htmlContent, showBanner) {
     const categorySlug = state.current.file.categorySlug || null;
     const oldSlug = state.current.file.slug || state.current.file.name;
 
-    if (categorySlug && state.categoriesIndex && state.categoriesPath) {
-      const updatedIndex = state.categoriesIndex.map(c => {
-        if (c.slug !== categorySlug) return c;
-        const article = {
-          slug: finalName,
-          title: finalTitle,
-          summary: newDoc.summary || '',
-          category: categorySlug,
-          word_count: wordCount,
-        };
-        const articles = (c.articles || []).filter(a => a.slug !== oldSlug && a.slug !== finalName);
-        return { ...c, articles: [...articles, article] };
-      });
-      const categoriesBase64 = bytesToBase64(
-        new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2))
-      );
+    const commitMsg = commitMsgInput
+      || (state.current.sha
+        ? (renaming ? `rinomina "${oldSlug}" in "${finalName}"` : `aggiorna "${finalName}"`)
+        : `crea "${finalName}"`);
 
-      const changes = [{ path: newPath, base64Content: base64 }];
-      if (renaming && state.current.sha) {
-        changes.push({ path: state.current.file.path, delete: true });
-      }
-      changes.push({ path: state.categoriesPath, base64Content: categoriesBase64 });
-
-      const commitMsg = commitMsgInput
-        || (state.current.sha
-          ? (renaming ? `rinomina "${oldSlug}" in "${finalName}"` : `aggiorna "${finalName}"`)
-          : `crea "${finalName}"`);
-
-      await commitFilesAtomic(state.config, changes, commitMsg);
-
-      state.current.file = { name: finalName, slug: finalName, path: newPath, categorySlug };
-      state.categoriesIndex = updatedIndex;
-      state.categoriesSha = null;
-      try {
-        const { sha } = await fetchFile(state.config, newPath);
-        state.current.sha = sha;
-      } catch (_) {
-        state.current.sha = null;
-      }
-    } else if (renaming) {
-      if (state.current.sha) {
-        const commitMsg = commitMsgInput || `rinomina "${state.current.file.name}" in "${finalName}"`;
-        const { sha } = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
-        state.current.sha = sha;
-      } else {
-        const created = await putFile(state.config, newPath, base64, commitMsgInput || `crea "${finalName}"`, null);
-        state.current.sha = created?.content?.sha ?? null;
-      }
-      state.current.file = { name: finalName, slug: finalName, path: newPath };
+    let newSha;
+    if (renaming && state.current.sha) {
+      const renameResult = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
+      newSha = renameResult.sha;
+    } else if (state.current.sha) {
+      const { data } = await putFileRetrying(state.config, newPath, base64, commitMsg, state.current.sha);
+      newSha = data?.content?.sha ?? null;
+      conflictWasResolved = false;
     } else {
-      const message = commitMsgInput || `aggiorna "${finalName}"`;
-      const { data: res, conflictResolved } = await putFileRetrying(state.config, newPath, base64, message, state.current.sha);
-      state.current.sha = res?.content?.sha ?? state.current.sha;
-      conflictWasResolved = conflictResolved;
+      const created = await putFile(state.config, newPath, base64, commitMsg, null);
+      newSha = created?.content?.sha ?? null;
     }
 
+    if (categorySlug && state.categoriesIndex) {
+      const destCat = state.categoriesIndex.find(c => c.slug === categorySlug);
+      const meta = {
+        slug: finalName,
+        title: finalTitle,
+        summary: newDoc.summary || '',
+        word_count: wordCount,
+        category: categorySlug,
+        category_name: destCat?.name || newDoc.category_name || '',
+      };
+      if (renaming && state.current.sha) {
+        renameVirtualIndexEntry(state.config, state.current.file.path, newPath, newSha, meta);
+      } else {
+        updateVirtualIndexEntry(state.config, newPath, newSha, meta);
+      }
+      if (renaming) categoriesIndexRemoveArticle(categorySlug, oldSlug);
+      categoriesIndexUpsertArticle(categorySlug, meta.category_name, {
+        slug: meta.slug,
+        title: meta.title,
+        summary: meta.summary,
+        category: meta.category,
+        word_count: meta.word_count,
+      });
+    }
+
+    state.current.file = { name: finalName, slug: finalName, path: newPath, ...(categorySlug ? { categorySlug } : {}) };
+    state.current.sha = newSha;
     state.current.doc = newDoc;
   }, { onError: e => `Salvataggio non riuscito: ${e.message}` });
 
