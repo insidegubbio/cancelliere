@@ -104,6 +104,18 @@ export async function fetchFile(cfg, path) {
   return { bytes: base64ToBytes(base64), sha: data.sha };
 }
 
+export async function fetchBlobJson(cfg, sha) {
+  const res = await fetch(`${apiBase(cfg)}/git/blobs/${sha}`, { headers: ghHeaders(cfg.token) });
+  if (!res.ok) {
+    const body = await safeJson(res);
+    throwGhError(res.status, body);
+  }
+  const data = await res.json();
+  const bytes = base64ToBytes(data.content);
+  const text = new TextDecoder().decode(bytes);
+  return JSON.parse(text);
+}
+
 export function putFile(cfg, path, base64Content, commitMessage, sha) {
   return enqueueWrite(async () => {
     const body = { message: normalizeCommitMessage(commitMessage), content: base64Content, branch: cfg.branch };
@@ -265,6 +277,19 @@ async function getRecursiveTree(cfg, treeSha) {
   return res.json();
 }
 
+export async function fetchTreeRecursive(cfg, folder, { forceRefresh = false } = {}) {
+  const { treeSha } = await getHeadAndTree(cfg, { forceRefresh });
+  const { tree, truncated } = await getRecursiveTree(cfg, treeSha);
+  const clean = (folder || '').replace(/\/+$/, '');
+  const prefix = clean ? clean + '/' : '';
+  const entries = (tree || []).filter(entry => {
+    if (entry.type !== 'blob') return false;
+    if (!isJsonLikeName(entry.path.split('/').pop())) return false;
+    return entry.path === clean || (prefix && entry.path.startsWith(prefix));
+  });
+  return { entries, truncated: !!truncated };
+}
+
 async function commitTreeChange(cfg, buildEntries, commitMessage) {
   const key = repoKey(cfg);
   const message = normalizeCommitMessage(commitMessage);
@@ -281,7 +306,6 @@ async function commitTreeChange(cfg, buildEntries, commitMessage) {
     } catch (e) {
       lastErr = e;
       headCache.delete(key);
-      // retry when 422
       const isRetryable = !(e instanceof GhApiError) ||
         e.status === 422 ||
         e.status === 409;
@@ -313,12 +337,6 @@ export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, 
   });
 }
 
-// changes: array di
-//   { path, base64Content }   -> crea/aggiorna il file a quel path
-//   { path, delete: true }    -> rimuove il file a quel path
-// Tutte le modifiche finiscono in un solo albero/commit (una sola entry in
-// git log), usando lo stesso meccanismo di retry-su-conflitto già usato da
-// renameFileAtomic/renameFolderAtomic.
 export function commitFilesAtomic(cfg, changes, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async () => {
