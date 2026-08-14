@@ -1,7 +1,7 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameAndUpdateFileAtomic, commitFilesAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, bytesToBase64 } from '../api/github.js';
-import { loadCategoriesIndex, saveCategoriesIndex } from '../api/categories.js';
+import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, putFileRetrying, bytesToBase64 } from '../api/github.js';
+import { buildVirtualIndex, updateVirtualIndexEntry, renameVirtualIndexEntry, removeVirtualIndexEntry } from '../api/virtualIndex.js';
 import { state } from '../state.js';
 
 export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
@@ -110,7 +110,11 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   const countLabel = pageHeader.querySelector('#file-count-label');
   const total = (state.files || []).length + (state.dirs || []).length;
   const nested = usingVirtual ? insideCategory : (state.currentFolder || state.config.folder) !== state.config.folder;
-  countLabel.textContent = state.busy ? 'Caricamento…' : `${total} element${total === 1 ? 'o' : 'i'}${nested ? ' in questa cartella' : ''}`;
+  if (state.busy && state.indexProgress) {
+    countLabel.textContent = `Costruisco l'indice dagli articoli… ${state.indexProgress.done}/${state.indexProgress.total}`;
+  } else {
+    countLabel.textContent = state.busy ? 'Caricamento…' : `${total} element${total === 1 ? 'o' : 'i'}${nested ? ' in questa cartella' : ''}`;
+  }
 
   const searchInput = searchWrap.querySelector('#f-search');
   const searchClear = searchWrap.querySelector('#btn-search-clear');
@@ -143,7 +147,7 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   app.appendChild(actionsBar);
 
   app.appendChild(el(usingVirtual
-    ? `<footer class="note">Le cartelle qui sopra sono ricostruite dall'indice delle categorie (${escapeHtml(state.categoriesPath || '')}) e non sono cartelle reali del repository: gli articoli sono salvati come file "piatti" senza estensione. Creare/rinominare/eliminare un documento aggiorna subito questa vista, ma non riscrive l'indice delle categorie su GitHub.</footer>`
+    ? `<footer class="note">Le categorie qui sopra sono ricostruite leggendo il campo "category" scritto dentro ciascun articolo: non esiste più un indice separato da tenere sincronizzato. Creare, rinominare, spostare o eliminare un documento aggiorna sia GitHub sia questa vista immediatamente.</footer>`
     : `<footer class="note">I file sono salvati come slug senza estensione nel repository GitHub.</footer>`));
 
   top.querySelector('#btn-settings').addEventListener('click', onSettings);
@@ -163,7 +167,7 @@ function renderListBody(card, render, onOpenFile) {
   const files = searchMode ? state.searchFiles : state.files;
 
   if (state.busy || (searchMode && state.searching)) {
-    const label = searchMode ? 'Cerco…' : 'Carico i documenti dal repository…';
+    const label = searchMode ? 'Cerco…' : (state.indexProgress ? `Costruisco l'indice dagli articoli… ${state.indexProgress.done}/${state.indexProgress.total}` : 'Carico i documenti dal repository…');
     card.appendChild(el(`<div class="empty"><span class="spinner"></span>${label}</div>`));
     return;
   }
@@ -524,24 +528,38 @@ export async function refreshList(render, { forceReload = false } = {}) {
   state.busy = true;
   state.error = null;
   state.info = null;
+  state.indexProgress = null;
   render();
   try {
     if (forceReload) {
       state.categoriesIndex = null;
-      state.categoriesPath = null;
-      state.categoriesSha = null;
     }
     if (state.categoriesIndex === null) {
-      const idx = await loadCategoriesIndex(state.config);
+      const top = await listFolder(state.config, state.config.folder);
       if (seq !== refreshSeq) return;
-      state.categoriesIndex = idx ? idx.categories : false;
-      state.categoriesPath = idx ? idx.path : null;
-      state.categoriesSha = idx ? idx.sha : null;
+      const looksVirtual = !top.dirs.length && top.files.length > 0;
+      if (looksVirtual) {
+        state.categoriesIndex = await buildVirtualIndex(state.config, {
+          forceRefresh: forceReload,
+          onProgress: (done, total) => {
+            if (seq !== refreshSeq) return;
+            state.indexProgress = { done, total };
+            if (done === total || done % 15 === 0) render();
+          },
+        });
+      } else {
+        state.categoriesIndex = false;
+        if (!state.currentFolder || state.currentFolder === state.config.folder) {
+          state.dirs = top.dirs;
+          state.files = top.files;
+        }
+      }
+      if (seq !== refreshSeq) return;
     }
     if (state.categoriesIndex) {
       applyVirtualFolder();
-    } else {
-      const { dirs, files } = await listFolder(state.config, state.currentFolder || state.config.folder);
+    } else if (state.currentFolder && state.currentFolder !== state.config.folder) {
+      const { dirs, files } = await listFolder(state.config, state.currentFolder);
       if (seq !== refreshSeq) return;
       state.dirs = dirs;
       state.files = files;
@@ -551,6 +569,7 @@ export async function refreshList(render, { forceReload = false } = {}) {
     state.error = e.message;
   }
   if (seq !== refreshSeq) return;
+  state.indexProgress = null;
   state.busy = false;
   render();
 }
@@ -578,32 +597,20 @@ function applyVirtualFolder() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-async function persistCategoriesIndex(commitMessage) {
-  if (!state.categoriesIndex || !state.categoriesPath) return;
-  try {
-    if (!state.categoriesSha) {
-      try {
-        const { sha } = await fetchFile(state.config, state.categoriesPath);
-        state.categoriesSha = sha;
-      } catch (_) {
-      }
-    }
-    state.categoriesSha = await saveCategoriesIndex(
-      state.config, state.categoriesPath, state.categoriesIndex, state.categoriesSha, commitMessage
-    );
-  } catch (e) {
-    state.error = `Indice categorie non sincronizzato su GitHub: ${e.message}`;
-  }
-}
-
-function categoriesIndexAddArticle(categorySlug, article) {
+export function categoriesIndexUpsertArticle(categorySlug, categoryName, article) {
   if (!state.categoriesIndex) return;
-  const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
-  if (!cat) return;
-  cat.articles = [...(cat.articles || []).filter(a => a.slug !== article.slug), article];
+  let cat = state.categoriesIndex.find(c => c.slug === categorySlug);
+  if (!cat) {
+    cat = { slug: categorySlug, name: categoryName || categorySlug || 'Senza categoria', articles: [] };
+    state.categoriesIndex = [...state.categoriesIndex, cat].sort((a, b) => a.name.localeCompare(b.name));
+  } else if (categoryName && cat.name !== categoryName) {
+    cat.name = categoryName;
+  }
+  cat.articles = [...(cat.articles || []).filter(a => a.slug !== article.slug), article]
+    .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 }
 
-function categoriesIndexRemoveArticle(categorySlug, slug) {
+export function categoriesIndexRemoveArticle(categorySlug, slug) {
   if (!state.categoriesIndex) return;
   const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
   if (!cat) return;
@@ -656,7 +663,6 @@ async function ensureFileSha(file) {
 
 async function recoverStaleList(render) {
   state.categoriesIndex = null;
-  state.categoriesPath = null;
   await refreshList(render);
 }
 
@@ -679,37 +685,35 @@ async function renameFile(file, newName, rowEl, render) {
   try {
     const { bytes } = await fetchFile(state.config, file.path);
     let base64;
+    let meta = null;
     try {
       const doc = JSON.parse(new TextDecoder().decode(bytes));
       doc.slug = newName;
       base64 = bytesToBase64(new TextEncoder().encode(JSON.stringify(doc, null, 2)));
+      meta = {
+        slug: newName,
+        title: doc.title || newName,
+        summary: doc.summary || '',
+        word_count: doc.word_count || 0,
+        category: doc.category || '',
+        category_name: doc.category_name || '',
+      };
     } catch (_) {
       base64 = bytesToBase64(bytes);
     }
     const commitMessage = `chore: rinomina "${currentSlug}" in "${newName}"`;
+    const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, commitMessage);
 
-    if (file.categorySlug && state.categoriesIndex && state.categoriesPath) {
-      const updatedIndex = state.categoriesIndex.map(c => {
-        if (c.slug !== file.categorySlug) return c;
-        return {
-          ...c,
-          articles: (c.articles || []).map(a => a.slug === currentSlug ? { ...a, slug: newName } : a),
-        };
+    if (state.categoriesIndex && meta) {
+      renameVirtualIndexEntry(state.config, file.path, newPath, newSha, meta);
+      if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, currentSlug);
+      categoriesIndexUpsertArticle(meta.category, meta.category_name, {
+        slug: meta.slug,
+        title: meta.title,
+        summary: meta.summary,
+        category: meta.category,
+        word_count: meta.word_count,
       });
-      const categoriesBase64 = bytesToBase64(
-        new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2))
-      );
-
-      await commitFilesAtomic(state.config, [
-        { path: newPath, base64Content: base64 },
-        { path: file.path, delete: true },
-        { path: state.categoriesPath, base64Content: categoriesBase64 },
-      ], commitMessage);
-
-      state.categoriesIndex = updatedIndex;
-      state.categoriesSha = null;
-    } else {
-      await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, commitMessage);
     }
 
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
@@ -736,9 +740,9 @@ async function deleteFileAction(file, rowEl, render) {
   try {
     const sha = await ensureFileSha(file);
     await deleteFile(state.config, file.path, sha, `chore: elimina "${file.name}"`);
-    if (file.categorySlug) {
-      categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
-      await persistCategoriesIndex(`chore: aggiorna indice dopo eliminazione "${file.name}"`);
+    if (state.categoriesIndex) {
+      removeVirtualIndexEntry(state.config, file.path);
+      if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, file.slug || file.name);
     }
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" eliminato.`;
@@ -790,7 +794,7 @@ async function moveFile(file, destFolder, render) {
 
 async function moveFileToCategory(file, destSlug, render) {
   if (state.actionBusy) return;
-  if (!state.categoriesIndex || !state.categoriesPath) return;
+  if (!state.categoriesIndex) return;
   if (destSlug === file.categorySlug) return;
 
   const destCat = state.categoriesIndex.find(c => c.slug === destSlug);
@@ -804,44 +808,40 @@ async function moveFileToCategory(file, destSlug, render) {
   render();
 
   try {
-    const { bytes } = await fetchFile(state.config, file.path);
+    const { bytes, sha } = await fetchFile(state.config, file.path);
     let base64;
-    let article;
+    let meta;
     try {
       const doc = JSON.parse(new TextDecoder().decode(bytes));
       doc.category = destSlug;
       doc.category_name = destCat.name || '';
       base64 = bytesToBase64(new TextEncoder().encode(JSON.stringify(doc, null, 2)));
-      article = {
+      meta = {
         slug,
         title: doc.title || file.name,
         summary: doc.summary || '',
-        category: destSlug,
         word_count: doc.word_count || 0,
+        category: destSlug,
+        category_name: destCat.name || '',
       };
     } catch (_) {
       base64 = bytesToBase64(bytes);
-      article = { slug, title: file.name, summary: '', category: destSlug, word_count: 0 };
+      meta = { slug, title: file.name, summary: '', word_count: 0, category: destSlug, category_name: destCat.name || '' };
     }
 
-    const updatedIndex = state.categoriesIndex.map(c => {
-      if (c.slug === file.categorySlug) {
-        return { ...c, articles: (c.articles || []).filter(a => a.slug !== slug) };
-      }
-      if (c.slug === destSlug) {
-        return { ...c, articles: [...(c.articles || []).filter(a => a.slug !== slug), article] };
-      }
-      return c;
+    const { data } = await putFileRetrying(state.config, file.path, base64, `chore: sposta "${file.name}" nella categoria "${destCat.name}"`, sha);
+    const newSha = data?.content?.sha ?? sha;
+
+    updateVirtualIndexEntry(state.config, file.path, newSha, meta);
+    if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, slug);
+    categoriesIndexUpsertArticle(destSlug, destCat.name, {
+      slug: meta.slug,
+      title: meta.title,
+      summary: meta.summary,
+      category: meta.category,
+      word_count: meta.word_count,
     });
-    const categoriesBase64 = bytesToBase64(new TextEncoder().encode(JSON.stringify(updatedIndex, null, 2)));
 
-    await commitFilesAtomic(state.config, [
-      { path: file.path, base64Content: base64 },
-      { path: state.categoriesPath, base64Content: categoriesBase64 },
-    ], `chore: sposta "${file.name}" nella categoria "${destCat.name}"`);
-
-    state.categoriesIndex = updatedIndex;
-    state.categoriesSha = null;
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" spostato nella categoria "${destCat.name}".`;
   } catch (e) {
@@ -887,5 +887,3 @@ async function renameFolder(dir, newName, rowEl, render) {
   state.actionBusy = false;
   render();
 }
-
-export { categoriesIndexAddArticle, persistCategoriesIndex };
