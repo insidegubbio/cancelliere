@@ -1,6 +1,6 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, deleteFolderAtomic, searchFiles, createFolder, fetchFile, putFileRetrying, bytesToBase64 } from '../api/github.js';
+import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, deleteFolderAtomic, searchFiles, createFolder, fetchFile, putFileRetrying, bytesToBase64, base64ToBytes, commitTreeChange, getRecursiveTree } from '../api/github.js';
 import { buildVirtualIndex, updateVirtualIndexEntry, renameVirtualIndexEntry, removeVirtualIndexEntry } from '../api/virtualIndex.js';
 import { state } from '../state.js';
 export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
@@ -339,7 +339,7 @@ function buildDirRow(d, render, onOpenFile) {
     </div>
   `);
   body.addEventListener('click', () => navigate(d.path, render));
-  const showRenameDir = !d.virtual;
+  const showRenameDir = true;
   const actions = el(`
     <div class="file-row-actions">
       ${showRenameDir ? `<button class="btn-icon btn-rename-dir" title="Rinomina cartella">${iconSvg('pencil')}</button>` : ''}
@@ -376,7 +376,10 @@ function buildDirRow(d, render, onOpenFile) {
       input.focus(); input.select();
       const cancelFn = () => { wrap.remove(); actions.style.display = ''; openBtn.style.display = ''; };
       cancel.addEventListener('click', cancelFn);
-      ok.addEventListener('click', () => renameFolder(d, input.value.trim(), row, render));
+      ok.addEventListener('click', () => {
+        if (d.virtual) renameCategoryAction(d, input.value.trim(), row, render);
+        else renameFolder(d, input.value.trim(), row, render);
+      });
       input.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); if (e.key === 'Escape') cancelFn(); });
     });
   }
@@ -395,7 +398,10 @@ function buildDirRow(d, render, onOpenFile) {
       `);
       row.appendChild(wrap);
       const cancelFn = () => { wrap.remove(); actions.style.display = ''; openBtn.style.display = ''; };
-      wrap.querySelectorAll('button')[0].addEventListener('click', () => deleteFolderAction(d, row, render));
+      wrap.querySelectorAll('button')[0].addEventListener('click', () => {
+        if (d.virtual) deleteCategoryAction(d, row, render);
+        else deleteFolderAction(d, row, render);
+      });
       wrap.querySelectorAll('button')[1].addEventListener('click', cancelFn);
     });
   }
@@ -836,4 +842,76 @@ async function deleteFolderAction(dir, rowEl, render) {
   }
   state.actionBusy = false;
   render();
+}
+async function renameCategoryAction(dir, newName, rowEl, render) {
+  if (!newName || newName === dir.name) { render(); return; }
+  if (state.actionBusy) return;
+  const cat = (state.categoriesIndex || []).find(c => c.slug === dir.slug);
+  if (!cat) return;
+  state.actionBusy = true;
+  render();
+  try {
+    await commitTreeChange(state.config, async (treeSha) => {
+      const { tree, truncated } = await getRecursiveTree(state.config, treeSha);
+      if (truncated) throw new Error('Troppi file per rinominare la categoria in un\'unica operazione.');
+      const slugSet = new Set((cat.articles || []).map(a => a.slug));
+      const matching = (tree || []).filter(e => e.type === 'blob' && slugSet.has(slugFromPath(e.path)));
+      if (!matching.length) throw new Error('Nessun articolo trovato per questa categoria.');
+      const entries = await Promise.all(matching.map(async e => {
+        const res = await fetch(`https://api.github.com/repos/${state.config.owner}/${state.config.repo}/git/blobs/${e.sha}`, {
+          headers: { Authorization: `token ${state.config.token}`, Accept: 'application/vnd.github.v3+json' },
+        });
+        const json = await res.json();
+        const bytes = base64ToBytes(json.content);
+        const doc = JSON.parse(new TextDecoder().decode(bytes));
+        doc.category_name = newName;
+        return { path: e.path, mode: e.mode, type: 'blob', content: JSON.stringify(doc, null, 2) };
+      }));
+      return entries;
+    }, `chore: rinomina categoria "${dir.name}" in "${newName}"`);
+    cat.name = newName;
+    state.dirs = state.dirs.map(d => d.path === dir.path ? { ...d, name: newName } : d);
+    state.searchDirs = state.searchDirs.map(d => d.path === dir.path ? { ...d, name: newName } : d);
+    state.info = `Categoria "${dir.name}" rinominata in "${newName}".`;
+  } catch (e) {
+    state.actionBusy = false;
+    state.error = `Rinomina categoria non riuscita: ${e.message}`;
+    render();
+    return;
+  }
+  state.actionBusy = false;
+  render();
+}
+async function deleteCategoryAction(dir, rowEl, render) {
+  if (state.actionBusy) return;
+  const cat = (state.categoriesIndex || []).find(c => c.slug === dir.slug);
+  if (!cat) return;
+  state.actionBusy = true;
+  render();
+  try {
+    await commitTreeChange(state.config, async (treeSha) => {
+      const { tree, truncated } = await getRecursiveTree(state.config, treeSha);
+      if (truncated) throw new Error('Troppi file per eliminare la categoria in un\'unica operazione.');
+      const slugSet = new Set((cat.articles || []).map(a => a.slug));
+      const matching = (tree || []).filter(e => e.type === 'blob' && slugSet.has(slugFromPath(e.path)));
+      if (!matching.length) throw new Error('Nessun articolo trovato per questa categoria.');
+      return matching.map(e => ({ path: e.path, mode: e.mode, type: 'blob', sha: null }));
+    }, `chore: elimina categoria "${dir.name}"`);
+    (cat.articles || []).forEach(a => removeVirtualIndexEntry(state.config, `${state.config.folder}/${a.slug}`));
+    state.categoriesIndex = (state.categoriesIndex || []).filter(c => c.slug !== dir.slug);
+    state.dirs = state.dirs.filter(d => d.path !== dir.path);
+    state.searchDirs = state.searchDirs.filter(d => d.path !== dir.path);
+    state.info = `Categoria "${dir.name}" eliminata.`;
+  } catch (e) {
+    state.actionBusy = false;
+    state.error = `Eliminazione categoria non riuscita: ${e.message}`;
+    render();
+    return;
+  }
+  state.actionBusy = false;
+  render();
+}
+function slugFromPath(path) {
+  const name = path.split('/').pop();
+  return name.toLowerCase().endsWith('.json') ? name.slice(0, -5) : name;
 }
