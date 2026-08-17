@@ -4,14 +4,12 @@ function ghHeaders(token) {
     'Accept': 'application/vnd.github+json',
   };
 }
-
 function apiBase(cfg) {
-  return `https://api.github.com/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}`;
+  return `https:
 }
-
 export async function getAuthenticatedUser(cfg) {
   try {
-    const res = await fetch('https://api.github.com/user', { headers: ghHeaders(cfg.token) });
+    const res = await fetch('https:
     if (!res.ok) return null;
     const data = await res.json();
     return data?.login || null;
@@ -19,18 +17,15 @@ export async function getAuthenticatedUser(cfg) {
     return null;
   }
 }
-
 function encodePath(path) {
   return path.split('/').map(encodeURIComponent).join('/');
 }
-
 function isJsonLikeName(name) {
   const lower = name.toLowerCase();
   if (lower.endsWith('.json')) return true;
   const base = name.replace(/^\.+/, '');
   return base.length > 0 && !base.includes('.');
 }
-
 export class GhApiError extends Error {
   constructor(status, message) {
     super(message);
@@ -38,7 +33,6 @@ export class GhApiError extends Error {
     this.status = status;
   }
 }
-
 function errorMessage(status, body) {
   const msg = body?.message ?? '';
   if (status === 401) return 'Token non valido o scaduto. Controlla il Personal Access Token.';
@@ -48,26 +42,21 @@ function errorMessage(status, body) {
   if (status === 422 && msg.toLowerCase().includes('not a fast forward')) return 'Il branch è stato aggiornato da un\'altra operazione durante il salvataggio. Riprova tra un momento.';
   return `Errore GitHub (${status}): ${msg}`;
 }
-
 function throwGhError(status, body) {
   throw new GhApiError(status, errorMessage(status, body));
 }
-
 async function safeJson(res) {
   try { return await res.json(); } catch (_) { return null; }
 }
-
 function normalizeCommitMessage(msg) {
   return (msg ?? '').toString().toLowerCase();
 }
-
 let writeQueue = Promise.resolve();
 function enqueueWrite(task) {
   const run = writeQueue.then(task, task);
   writeQueue = run.then(() => {}, () => {});
   return run;
 }
-
 export async function listFolder(cfg, folderPath) {
   const url = `${apiBase(cfg)}/contents/${encodePath(folderPath)}?ref=${encodeURIComponent(cfg.branch)}`;
   const res = await fetch(url, { headers: ghHeaders(cfg.token) });
@@ -83,7 +72,6 @@ export async function listFolder(cfg, folderPath) {
                .sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
-
 export async function fetchFile(cfg, path) {
   const url = `${apiBase(cfg)}/contents/${encodePath(path)}?ref=${encodeURIComponent(cfg.branch)}`;
   const res = await fetch(url, { headers: ghHeaders(cfg.token) });
@@ -93,17 +81,14 @@ export async function fetchFile(cfg, path) {
   }
   const data = await res.json();
   let base64 = data.content;
-
   if (!base64 && data.sha) {
     const blobRes = await fetch(`${apiBase(cfg)}/git/blobs/${data.sha}`, { headers: ghHeaders(cfg.token) });
     if (!blobRes.ok) throw new Error('Impossibile leggere il contenuto del file (file troppo grande?).');
     const blobData = await blobRes.json();
     base64 = blobData.content;
   }
-
   return { bytes: base64ToBytes(base64), sha: data.sha };
 }
-
 export async function fetchBlobJson(cfg, sha) {
   const res = await fetch(`${apiBase(cfg)}/git/blobs/${sha}`, { headers: ghHeaders(cfg.token) });
   if (!res.ok) {
@@ -115,12 +100,10 @@ export async function fetchBlobJson(cfg, sha) {
   const text = new TextDecoder().decode(bytes);
   return JSON.parse(text);
 }
-
 export function putFile(cfg, path, base64Content, commitMessage, sha) {
   return enqueueWrite(async () => {
     const body = { message: normalizeCommitMessage(commitMessage), content: base64Content, branch: cfg.branch };
     if (sha) body.sha = sha;
-
     const res = await fetch(`${apiBase(cfg)}/contents/${encodePath(path)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', ...ghHeaders(cfg.token) },
@@ -135,7 +118,6 @@ export function putFile(cfg, path, base64Content, commitMessage, sha) {
     return data;
   });
 }
-
 export async function putFileRetrying(cfg, path, base64Content, commitMessage, sha) {
   try {
     const data = await putFile(cfg, path, base64Content, commitMessage, sha);
@@ -147,7 +129,6 @@ export async function putFileRetrying(cfg, path, base64Content, commitMessage, s
     return { data, conflictResolved: true };
   }
 }
-
 export function deleteFile(cfg, path, sha, commitMessage) {
   return enqueueWrite(async () => {
     const res = await fetch(`${apiBase(cfg)}/contents/${encodePath(path)}`, {
@@ -162,18 +143,15 @@ export function deleteFile(cfg, path, sha, commitMessage) {
     invalidateHeadCache(cfg);
   });
 }
-
 const HEAD_CACHE_TTL_MS = 15000;
 const headCache = new Map();
 function repoKey(cfg) { return `${cfg.owner}/${cfg.repo}@${cfg.branch}`; }
 function invalidateHeadCache(cfg) { headCache.delete(repoKey(cfg)); }
-
 async function getHeadAndTree(cfg, { forceRefresh = false } = {}) {
   const key = repoKey(cfg);
   const cached = headCache.get(key);
   const cacheIsFresh = cached && (Date.now() - cached.cachedAt) < HEAD_CACHE_TTL_MS;
   if (!forceRefresh && cacheIsFresh) return cached;
-
   const res = await fetch(`${apiBase(cfg)}/commits/${encodeURIComponent(cfg.branch)}`, {
     headers: ghHeaders(cfg.token),
   });
@@ -186,7 +164,6 @@ async function getHeadAndTree(cfg, { forceRefresh = false } = {}) {
   headCache.set(key, result);
   return result;
 }
-
 async function createBlob(cfg, base64Content) {
   const res = await fetch(`${apiBase(cfg)}/git/blobs`, {
     method: 'POST',
@@ -199,7 +176,6 @@ async function createBlob(cfg, base64Content) {
   }
   return res.json();
 }
-
 async function createTree(cfg, baseTreeSha, entries) {
   const res = await fetch(`${apiBase(cfg)}/git/trees`, {
     method: 'POST',
@@ -212,7 +188,6 @@ async function createTree(cfg, baseTreeSha, entries) {
   }
   return res.json();
 }
-
 async function createCommit(cfg, message, treeSha, parentSha) {
   const res = await fetch(`${apiBase(cfg)}/git/commits`, {
     method: 'POST',
@@ -225,7 +200,6 @@ async function createCommit(cfg, message, treeSha, parentSha) {
   }
   return res.json();
 }
-
 async function updateRef(cfg, commitSha) {
   const res = await fetch(`${apiBase(cfg)}/git/refs/${encodeURIComponent('heads/' + cfg.branch)}`, {
     method: 'PATCH',
@@ -238,34 +212,27 @@ async function updateRef(cfg, commitSha) {
   }
   return res.json();
 }
-
 export async function searchFiles(cfg, rootFolder, query) {
   const q = (query || '').trim().toLowerCase();
   const { treeSha } = await getHeadAndTree(cfg);
   const { tree, truncated } = await getRecursiveTree(cfg, treeSha);
-
   const prefix = rootFolder.endsWith('/') ? rootFolder : rootFolder + '/';
   const dirs = [];
   const files = [];
-
   (tree || []).forEach(entry => {
     if (entry.path !== rootFolder && !entry.path.startsWith(prefix)) return;
     const name = entry.path.split('/').pop();
     if (!name.toLowerCase().includes(q)) return;
-
     if (entry.type === 'tree') {
       dirs.push({ name, path: entry.path });
     } else if (entry.type === 'blob' && isJsonLikeName(name)) {
       files.push({ name, path: entry.path, sha: entry.sha });
     }
   });
-
   dirs.sort((a, b) => a.name.localeCompare(b.name));
   files.sort((a, b) => a.name.localeCompare(b.name));
-
   return { dirs, files, truncated: !!truncated };
 }
-
 async function getRecursiveTree(cfg, treeSha) {
   const res = await fetch(`${apiBase(cfg)}/git/trees/${treeSha}?recursive=1`, {
     headers: ghHeaders(cfg.token),
@@ -276,7 +243,6 @@ async function getRecursiveTree(cfg, treeSha) {
   }
   return res.json();
 }
-
 export async function fetchTreeRecursive(cfg, folder, { forceRefresh = false } = {}) {
   const { treeSha } = await getHeadAndTree(cfg, { forceRefresh });
   const { tree, truncated } = await getRecursiveTree(cfg, treeSha);
@@ -289,7 +255,6 @@ export async function fetchTreeRecursive(cfg, folder, { forceRefresh = false } =
   });
   return { entries, truncated: !!truncated };
 }
-
 async function commitTreeChange(cfg, buildEntries, commitMessage) {
   const key = repoKey(cfg);
   const message = normalizeCommitMessage(commitMessage);
@@ -315,7 +280,6 @@ async function commitTreeChange(cfg, buildEntries, commitMessage) {
   }
   throw lastErr;
 }
-
 export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async () => [
@@ -325,7 +289,6 @@ export function renameFileAtomic(cfg, oldPath, newPath, blobSha, commitMessage) 
     return { commit, sha: blobSha };
   });
 }
-
 export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, commitMessage) {
   return enqueueWrite(async () => {
     const blob = await createBlob(cfg, base64Content);
@@ -336,7 +299,6 @@ export function renameAndUpdateFileAtomic(cfg, oldPath, newPath, base64Content, 
     return { commit, sha: blob.sha };
   });
 }
-
 export function commitFilesAtomic(cfg, changes, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async () => {
@@ -354,7 +316,6 @@ export function commitFilesAtomic(cfg, changes, commitMessage) {
     return { commit };
   });
 }
-
 export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMessage) {
   return enqueueWrite(async () => {
     const commit = await commitTreeChange(cfg, async (treeSha) => {
@@ -362,13 +323,11 @@ export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMess
       if (truncated) {
         throw new Error('La cartella contiene troppi file per essere rinominata in un\'unica operazione.');
       }
-
       const prefix = oldFolderPath.endsWith('/') ? oldFolderPath : oldFolderPath + '/';
       const matching = (tree || []).filter(entry => entry.type === 'blob' && entry.path.startsWith(prefix));
       if (!matching.length) {
         throw new Error('La cartella risulta vuota o non è stata trovata.');
       }
-
       const entries = [];
       matching.forEach(entry => {
         const suffix = entry.path.slice(prefix.length);
@@ -380,12 +339,27 @@ export function renameFolderAtomic(cfg, oldFolderPath, newFolderPath, commitMess
     return { commit };
   });
 }
-
+export function deleteFolderAtomic(cfg, folderPath, commitMessage) {
+  return enqueueWrite(async () => {
+    const commit = await commitTreeChange(cfg, async (treeSha) => {
+      const { tree, truncated } = await getRecursiveTree(cfg, treeSha);
+      if (truncated) {
+        throw new Error('La cartella contiene troppi file per essere eliminata in un\'unica operazione.');
+      }
+      const prefix = folderPath.endsWith('/') ? folderPath : folderPath + '/';
+      const matching = (tree || []).filter(entry => entry.type === 'blob' && entry.path.startsWith(prefix));
+      if (!matching.length) {
+        throw new Error('La cartella risulta vuota o non è stata trovata.');
+      }
+      return matching.map(entry => ({ path: entry.path, mode: entry.mode, type: 'blob', sha: null }));
+    }, commitMessage);
+    return { commit };
+  });
+}
 export function createFolder(cfg, folderPath, commitMessage) {
   const placeholderPath = `${folderPath}/.gitkeep`;
   return putFile(cfg, placeholderPath, '', commitMessage, null);
 }
-
 export function base64ToBytes(b64) {
   const clean = b64.replace(/\s/g, '');
   const bin = atob(clean);
@@ -393,7 +367,6 @@ export function base64ToBytes(b64) {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
 }
-
 export function bytesToBase64(bytes) {
   let bin = '';
   const chunk = 0x8000;
