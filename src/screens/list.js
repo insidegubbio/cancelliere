@@ -1,15 +1,12 @@
 import { el, escapeHtml, escapeAttr } from '../ui/helpers.js';
 import { themeToggleBtn } from '../ui/theme.js';
-import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, searchFiles, createFolder, fetchFile, putFileRetrying, bytesToBase64 } from '../api/github.js';
+import { listFolder, renameAndUpdateFileAtomic, deleteFile, renameFolderAtomic, deleteFolderAtomic, searchFiles, createFolder, fetchFile, putFileRetrying, bytesToBase64 } from '../api/github.js';
 import { buildVirtualIndex, updateVirtualIndexEntry, renameVirtualIndexEntry, removeVirtualIndexEntry } from '../api/virtualIndex.js';
 import { state } from '../state.js';
-
 export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNewFolder) {
   app.innerHTML = '';
-
   const usingVirtual = !!state.categoriesIndex;
   const insideCategory = usingVirtual && !!(state.currentFolder && state.currentFolder.startsWith('cat:'));
-
   const top = el(`
     <div class="topbar">
       <div>
@@ -22,11 +19,8 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
       </div>
     </div>
   `);
-
   top.querySelector('#theme-slot').replaceWith(themeToggleBtn(render));
-
   const bc = top.querySelector('#breadcrumb-slot');
-
   if (usingVirtual) {
     const crumbs = [{ label: 'Documenti', path: null }];
     if (insideCategory) {
@@ -51,7 +45,6 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
     const segments      = currentFolder.split('/');
     const rootIdx       = segments.indexOf(rootFolder.split('/').pop());
     const crumbSegments = segments.slice(rootIdx >= 0 ? rootIdx : 0);
-
     crumbSegments.forEach((seg, i) => {
       const isLast = i === crumbSegments.length - 1;
       if (!isLast) {
@@ -65,12 +58,9 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
       }
     });
   }
-
   app.appendChild(top);
-
   if (state.error) app.appendChild(el(`<div class="banner error">${escapeHtml(state.error)}</div>`));
   if (state.info)  app.appendChild(el(`<div class="banner ok">${escapeHtml(state.info)}</div>`));
-
   const pageHeader = el(`
     <div class="page-header">
       <div>
@@ -92,7 +82,6 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
     </div>
   `);
   app.appendChild(pageHeader);
-
   const searchWrap = el(`
     <div class="search-wrap">
       <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -102,11 +91,9 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   `);
   if (state.busy) searchWrap.querySelectorAll('input,button').forEach(e => e.disabled = true);
   app.appendChild(searchWrap);
-
   const card = el(`<div class="file-card"></div>`);
   renderListBody(card, render, onOpenFile);
   app.appendChild(card);
-
   const countLabel = pageHeader.querySelector('#file-count-label');
   const total = (state.files || []).length + (state.dirs || []).length;
   const nested = usingVirtual ? insideCategory : (state.currentFolder || state.config.folder) !== state.config.folder;
@@ -115,7 +102,6 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   } else {
     countLabel.textContent = state.busy ? 'Caricamento…' : `${total} element${total === 1 ? 'o' : 'i'}${nested ? ' in questa cartella' : ''}`;
   }
-
   const searchInput = searchWrap.querySelector('#f-search');
   const searchClear = searchWrap.querySelector('#btn-search-clear');
   searchInput.addEventListener('input', () => {
@@ -134,7 +120,6 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
     renderListBody(card, render, onOpenFile);
     searchInput.focus();
   });
-
   const actionsBar = el(`
     <div class="actions-bar">
       <button class="btn-ghost" id="btn-refresh">
@@ -145,11 +130,9 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   `);
   if (state.actionBusy) actionsBar.querySelectorAll('button').forEach(b => b.disabled = true);
   app.appendChild(actionsBar);
-
   app.appendChild(el(usingVirtual
     ? `<footer class="note">Le categorie qui sopra sono ricostruite leggendo il campo "category" scritto dentro ciascun articolo: non esiste più un indice separato da tenere sincronizzato. Creare, rinominare, spostare o eliminare un documento aggiorna sia GitHub sia questa vista immediatamente.</footer>`
     : `<footer class="note">I file sono salvati come slug senza estensione nel repository GitHub.</footer>`));
-
   top.querySelector('#btn-settings').addEventListener('click', onSettings);
   actionsBar.querySelector('#btn-refresh').addEventListener('click', () => refreshList(render, { forceReload: true }));
   const newFolderBtn = pageHeader.querySelector('#btn-new-folder');
@@ -157,21 +140,17 @@ export function renderList(app, render, onOpenFile, onSettings, onNewFile, onNew
   const newFileBtn = pageHeader.querySelector('#btn-new');
   if (newFileBtn) newFileBtn.addEventListener('click', onNewFile);
 }
-
 function renderListBody(card, render, onOpenFile) {
   card.innerHTML = '';
-
   const query      = (state.searchQuery || '').trim();
   const searchMode = query.length > 0;
   const dirs  = searchMode ? state.searchDirs  : state.dirs;
   const files = searchMode ? state.searchFiles : state.files;
-
   if (state.busy || (searchMode && state.searching)) {
     const label = searchMode ? 'Cerco…' : (state.indexProgress ? `Costruisco l'indice dagli articoli… ${state.indexProgress.done}/${state.indexProgress.total}` : 'Carico i documenti dal repository…');
     card.appendChild(el(`<div class="empty"><span class="spinner"></span>${label}</div>`));
     return;
   }
-
   if (!dirs.length && !files.length) {
     const msg = searchMode
       ? `Nessun risultato per &ldquo;${escapeHtml(query)}&rdquo;.`
@@ -179,11 +158,9 @@ function renderListBody(card, render, onOpenFile) {
     card.appendChild(el(`<div class="empty">${msg}</div>`));
     return;
   }
-
   if (searchMode && state.searchTruncated) {
     card.appendChild(el(`<div class="banner error" style="margin:12px 16px 0">Il repository è troppo grande: la ricerca potrebbe non coprire tutti i file.</div>`));
   }
-
   const ul = el(`<ul class="file-list"></ul>`);
   dirs.forEach(d => {
     const row = buildDirRow(d, render, onOpenFile);
@@ -197,10 +174,8 @@ function renderListBody(card, render, onOpenFile) {
   });
   card.appendChild(ul);
 }
-
 let searchSeq = 0;
 let searchDebounceTimer = null;
-
 function scheduleSearch(render, card, onOpenFile) {
   if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
   const query = (state.searchQuery || '').trim();
@@ -217,7 +192,6 @@ function scheduleSearch(render, card, onOpenFile) {
   state.searching = true;
   renderListBody(card, render, onOpenFile);
 }
-
 function virtualSearch(query) {
   const q = query.trim().toLowerCase();
   const dirs = [];
@@ -242,7 +216,6 @@ function virtualSearch(query) {
   files.sort((a, b) => a.name.localeCompare(b.name));
   return { dirs, files };
 }
-
 async function runSearch(render, card, onOpenFile) {
   const seq = ++searchSeq;
   const query = (state.searchQuery || '').trim();
@@ -271,7 +244,6 @@ async function runSearch(render, card, onOpenFile) {
   state.searching = false;
   renderListBody(card, render, onOpenFile);
 }
-
 function iconSvg(name) {
   const icons = {
     pencil: `<svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
@@ -283,15 +255,12 @@ function iconSvg(name) {
   };
   return icons[name] || '';
 }
-
 function buildFileRow(f, render, onOpenFile) {
   const row = document.createElement('li');
   row.className = 'file-row';
   row.dataset.path = f.path;
-
   const virtualMode = !!state.categoriesIndex;
   const renameDefault = f.slug || f.name;
-
   const icon = el(`<span class="file-row-icon" style="color:var(--muted-foreground)">${iconSvg('doc')}</span>`);
   const body = el(`
     <div class="file-row-body">
@@ -299,7 +268,6 @@ function buildFileRow(f, render, onOpenFile) {
       <div class="file-row-path">${escapeHtml(f.path)}</div>
     </div>
   `);
-
   const actions = el(`
     <div class="file-row-actions">
       <button class="btn-icon btn-rename" title="Rinomina file">${iconSvg('pencil')}</button>
@@ -307,25 +275,18 @@ function buildFileRow(f, render, onOpenFile) {
       <button class="btn-icon btn-icon-danger btn-delete" title="Elimina">${iconSvg('trash')}</button>
     </div>
   `);
-
   const openBtn = el(`<button class="btn-outline btn-open" style="padding:6px 14px;font-size:13px;flex-shrink:0">Apri</button>`);
-
   row.appendChild(icon);
   row.appendChild(body);
   row.appendChild(actions);
   row.appendChild(openBtn);
-
   openBtn.addEventListener('click', () => onOpenFile(f));
-
   let mode = 'idle';
-
   const setMode = (m) => {
     mode = m;
     actions.style.display = m === 'idle' ? '' : 'none';
     openBtn.style.display = m === 'idle' ? '' : 'none';
-
     row.querySelectorAll('.inline-rename, .inline-delete, .inline-move').forEach(e => e.remove());
-
     if (m === 'rename') {
       const wrap = el(`
         <div class="inline-rename rename-input-wrap">
@@ -343,7 +304,6 @@ function buildFileRow(f, render, onOpenFile) {
       cancel.addEventListener('click', () => setMode('idle'));
       input.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); if (e.key === 'Escape') cancel.click(); });
     }
-
     if (m === 'delete') {
       const wrap = el(`
         <div class="inline-delete delete-confirm-wrap">
@@ -356,27 +316,22 @@ function buildFileRow(f, render, onOpenFile) {
       wrap.querySelectorAll('button')[0].addEventListener('click', () => deleteFileAction(f, row, render));
       wrap.querySelectorAll('button')[1].addEventListener('click', () => setMode('idle'));
     }
-
     if (m === 'move') {
       if (virtualMode) showMoveCategoryDialog(f, render);
       else showMoveDialog(f, render);
       mode = 'idle';
     }
   };
-
   actions.querySelector('.btn-rename').addEventListener('click', (e) => { e.stopPropagation(); setMode('rename'); });
   const moveBtn = actions.querySelector('.btn-move');
   if (moveBtn) moveBtn.addEventListener('click', (e) => { e.stopPropagation(); setMode('move'); });
   actions.querySelector('.btn-delete').addEventListener('click', (e) => { e.stopPropagation(); setMode('delete'); });
-
   return row;
 }
-
 function buildDirRow(d, render, onOpenFile) {
   const row = document.createElement('li');
   row.className = 'file-row';
   row.dataset.path = d.path;
-
   const icon = el(`<span class="file-row-icon" style="color:var(--muted-foreground)">${iconSvg('folder')}</span>`);
   const body = el(`
     <div class="file-row-body" style="cursor:pointer">
@@ -384,27 +339,23 @@ function buildDirRow(d, render, onOpenFile) {
     </div>
   `);
   body.addEventListener('click', () => navigate(d.path, render));
-
   const showRenameDir = !d.virtual;
-
   const actions = el(`
     <div class="file-row-actions">
       ${showRenameDir ? `<button class="btn-icon btn-rename-dir" title="Rinomina cartella">${iconSvg('pencil')}</button>` : ''}
+      ${showRenameDir ? `<button class="btn-icon btn-icon-danger btn-delete-dir" title="Elimina cartella">${iconSvg('trash')}</button>` : ''}
     </div>
   `);
-
   const openBtn = el(`
     <button class="btn-ghost" style="flex-shrink:0;color:var(--muted-foreground);padding:6px 8px">
       ${iconSvg('chevron')}
     </button>
   `);
   openBtn.addEventListener('click', () => navigate(d.path, render));
-
   row.appendChild(icon);
   row.appendChild(body);
   row.appendChild(actions);
   row.appendChild(openBtn);
-
   const renameDirBtn = actions.querySelector('.btn-rename-dir');
   if (renameDirBtn) {
     renameDirBtn.addEventListener('click', (e) => {
@@ -429,14 +380,30 @@ function buildDirRow(d, render, onOpenFile) {
       input.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); if (e.key === 'Escape') cancelFn(); });
     });
   }
-
+  const deleteDirBtn = actions.querySelector('.btn-delete-dir');
+  if (deleteDirBtn) {
+    deleteDirBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      actions.style.display = 'none';
+      openBtn.style.display = 'none';
+      const wrap = el(`
+        <div class="inline-delete delete-confirm-wrap">
+          <span>Eliminare la cartella e tutti i suoi file?</span>
+          <button class="btn-outline" style="padding:5px 12px;font-size:13px;border-color:color-mix(in srgb,var(--destructive) 40%,transparent);color:var(--destructive)">Elimina</button>
+          <button class="btn-ghost" style="padding:5px 10px;font-size:13px">Annulla</button>
+        </div>
+      `);
+      row.appendChild(wrap);
+      const cancelFn = () => { wrap.remove(); actions.style.display = ''; openBtn.style.display = ''; };
+      wrap.querySelectorAll('button')[0].addEventListener('click', () => deleteFolderAction(d, row, render));
+      wrap.querySelectorAll('button')[1].addEventListener('click', cancelFn);
+    });
+  }
   return row;
 }
-
 function showMoveDialog(file, render) {
   const allDirs = [...(state.dirs || []), ...(state.searchDirs || [])];
   const rootFolder = state.currentFolder || state.config.folder;
-
   const overlay = el(`<div class="dialog-overlay"></div>`);
   const box = el(`
     <div class="dialog-box">
@@ -450,10 +417,8 @@ function showMoveDialog(file, render) {
   `);
   overlay.appendChild(box);
   document.body.appendChild(overlay);
-
   const list = box.querySelector('#move-dir-list');
   const options = [{ name: rootFolder.split('/').pop(), path: rootFolder }, ...allDirs.filter(d => d.path !== parentFolderOf(file.path))];
-
   if (!options.length) {
     list.innerHTML = `<div style="padding:16px;text-align:center;font-size:13px;color:var(--muted-foreground)">Nessuna cartella disponibile.</div>`;
   } else {
@@ -473,14 +438,11 @@ function showMoveDialog(file, render) {
     });
     if (list.lastChild) list.lastChild.style.borderBottom = 'none';
   }
-
   box.querySelector('#move-cancel').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
-
 function showMoveCategoryDialog(file, render) {
   const cats = (state.categoriesIndex || []).filter(c => c.slug !== file.categorySlug);
-
   const overlay = el(`<div class="dialog-overlay"></div>`);
   const box = el(`
     <div class="dialog-box">
@@ -494,9 +456,7 @@ function showMoveCategoryDialog(file, render) {
   `);
   overlay.appendChild(box);
   document.body.appendChild(overlay);
-
   const list = box.querySelector('#move-dir-list');
-
   if (!cats.length) {
     list.innerHTML = `<div style="padding:16px;text-align:center;font-size:13px;color:var(--muted-foreground)">Nessuna altra categoria disponibile.</div>`;
   } else {
@@ -516,13 +476,10 @@ function showMoveCategoryDialog(file, render) {
     });
     if (list.lastChild) list.lastChild.style.borderBottom = 'none';
   }
-
   box.querySelector('#move-cancel').addEventListener('click', () => overlay.remove());
   overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
-
 let refreshSeq = 0;
-
 export async function refreshList(render, { forceReload = false } = {}) {
   const seq = ++refreshSeq;
   state.busy = true;
@@ -573,7 +530,6 @@ export async function refreshList(render, { forceReload = false } = {}) {
   state.busy = false;
   render();
 }
-
 function applyVirtualFolder() {
   const cats = state.categoriesIndex;
   if (!state.currentFolder || !state.currentFolder.startsWith('cat:')) {
@@ -596,7 +552,6 @@ function applyVirtualFolder() {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
-
 export function categoriesIndexUpsertArticle(categorySlug, categoryName, article) {
   if (!state.categoriesIndex) return;
   let cat = state.categoriesIndex.find(c => c.slug === categorySlug);
@@ -609,24 +564,20 @@ export function categoriesIndexUpsertArticle(categorySlug, categoryName, article
   cat.articles = [...(cat.articles || []).filter(a => a.slug !== article.slug), article]
     .sort((a, b) => (a.title || '').localeCompare(b.title || ''));
 }
-
 export function categoriesIndexRemoveArticle(categorySlug, slug) {
   if (!state.categoriesIndex) return;
   const cat = state.categoriesIndex.find(c => c.slug === categorySlug);
   if (!cat) return;
   cat.articles = (cat.articles || []).filter(a => a.slug !== slug);
 }
-
 export function parentFolderOf(path) {
   const idx = path.lastIndexOf('/');
   return idx === -1 ? '' : path.slice(0, idx);
 }
-
 function removeFileEverywhere(path) {
   state.files = state.files.filter(x => x.path !== path);
   state.searchFiles = state.searchFiles.filter(x => x.path !== path);
 }
-
 function replaceFileEverywhere(oldPath, updatedFile) {
   const query         = (state.searchQuery || '').trim().toLowerCase();
   const currentFolder = state.currentFolder || state.config.folder;
@@ -639,7 +590,6 @@ function replaceFileEverywhere(oldPath, updatedFile) {
     state.searchFiles = [...state.searchFiles, updatedFile].sort((a, b) => a.name.localeCompare(b.name));
   }
 }
-
 function replaceDirEverywhere(oldPath, updatedDir) {
   const currentFolder = state.currentFolder || state.config.folder;
   state.dirs = state.dirs.filter(x => x.path !== oldPath);
@@ -648,40 +598,32 @@ function replaceDirEverywhere(oldPath, updatedDir) {
   }
   state.searchDirs = state.searchDirs.filter(x => x.path !== oldPath);
 }
-
 function navigate(path, render) {
   state.currentFolder = path;
   state.searchQuery = '';
   refreshList(render);
 }
-
 async function ensureFileSha(file) {
   if (file.sha) return file.sha;
   const { sha } = await fetchFile(state.config, file.path);
   return sha;
 }
-
 async function recoverStaleList(render) {
   state.categoriesIndex = null;
   await refreshList(render);
 }
-
 function staleItemMessage(label) {
   return `"${label}" non esiste più a questo percorso: probabilmente è stato rinominato, spostato o eliminato da un altro utente nel frattempo. La lista è stata aggiornata.`;
 }
-
 async function renameFile(file, newName, rowEl, render) {
   if (!newName) { state.error = 'Il nome non può essere vuoto.'; render(); return; }
   const currentSlug = file.slug || file.name;
   if (newName === currentSlug) { render(); return; }
   if (state.actionBusy) return;
-
   const folder  = parentFolderOf(file.path);
   const newPath = `${folder}/${newName}`;
-
   state.actionBusy = true;
   render();
-
   try {
     const { bytes } = await fetchFile(state.config, file.path);
     let base64;
@@ -703,7 +645,6 @@ async function renameFile(file, newName, rowEl, render) {
     }
     const commitMessage = `chore: rinomina "${currentSlug}" in "${newName}"`;
     const { sha: newSha } = await renameAndUpdateFileAtomic(state.config, file.path, newPath, base64, commitMessage);
-
     if (state.categoriesIndex && meta) {
       renameVirtualIndexEntry(state.config, file.path, newPath, newSha, meta);
       if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, currentSlug);
@@ -715,7 +656,6 @@ async function renameFile(file, newName, rowEl, render) {
         word_count: meta.word_count,
       });
     }
-
     replaceFileEverywhere(file.path, { ...file, path: newPath, slug: newName, name: file.categorySlug ? file.name : newName });
     state.info = `"${currentSlug}" rinominato in "${newName}".`;
   } catch (e) {
@@ -732,7 +672,6 @@ async function renameFile(file, newName, rowEl, render) {
   state.actionBusy = false;
   render();
 }
-
 async function deleteFileAction(file, rowEl, render) {
   if (state.actionBusy) return;
   state.actionBusy = true;
@@ -760,17 +699,14 @@ async function deleteFileAction(file, rowEl, render) {
   state.actionBusy = false;
   render();
 }
-
 async function moveFile(file, destFolder, render) {
   if (state.actionBusy) return;
   const newPath = `${destFolder}/${file.name}`;
   if (newPath === file.path) return;
-
   state.actionBusy = true;
   state.error = null;
   state.info = null;
   render();
-
   try {
     const { bytes } = await fetchFile(state.config, file.path);
     const base64 = bytesToBase64(bytes);
@@ -791,22 +727,17 @@ async function moveFile(file, destFolder, render) {
   state.actionBusy = false;
   render();
 }
-
 async function moveFileToCategory(file, destSlug, render) {
   if (state.actionBusy) return;
   if (!state.categoriesIndex) return;
   if (destSlug === file.categorySlug) return;
-
   const destCat = state.categoriesIndex.find(c => c.slug === destSlug);
   if (!destCat) return;
-
   const slug = file.slug || file.name;
-
   state.actionBusy = true;
   state.error = null;
   state.info = null;
   render();
-
   try {
     const { bytes, sha } = await fetchFile(state.config, file.path);
     let base64;
@@ -828,10 +759,8 @@ async function moveFileToCategory(file, destSlug, render) {
       base64 = bytesToBase64(bytes);
       meta = { slug, title: file.name, summary: '', word_count: 0, category: destSlug, category_name: destCat.name || '' };
     }
-
     const { data } = await putFileRetrying(state.config, file.path, base64, `chore: sposta "${file.name}" nella categoria "${destCat.name}"`, sha);
     const newSha = data?.content?.sha ?? sha;
-
     updateVirtualIndexEntry(state.config, file.path, newSha, meta);
     if (file.categorySlug) categoriesIndexRemoveArticle(file.categorySlug, slug);
     categoriesIndexUpsertArticle(destSlug, destCat.name, {
@@ -841,7 +770,6 @@ async function moveFileToCategory(file, destSlug, render) {
       category: meta.category,
       word_count: meta.word_count,
     });
-
     removeFileEverywhere(file.path);
     state.info = `"${file.name}" spostato nella categoria "${destCat.name}".`;
   } catch (e) {
@@ -858,17 +786,13 @@ async function moveFileToCategory(file, destSlug, render) {
   state.actionBusy = false;
   render();
 }
-
 async function renameFolder(dir, newName, rowEl, render) {
   if (!newName || newName === dir.name) { render(); return; }
   if (state.actionBusy) return;
-
   const parent  = parentFolderOf(dir.path);
   const newPath = `${parent}/${newName}`;
-
   state.actionBusy = true;
   render();
-
   try {
     await renameFolderAtomic(state.config, dir.path, newPath, `chore: rinomina cartella "${dir.name}" in "${newName}"`);
     replaceDirEverywhere(dir.path, { ...dir, name: newName, path: newPath });
@@ -880,6 +804,32 @@ async function renameFolder(dir, newName, rowEl, render) {
       state.error = staleItemMessage(dir.name);
     } else {
       state.error = `Rinomina cartella non riuscita: ${e.message}`;
+    }
+    render();
+    return;
+  }
+  state.actionBusy = false;
+  render();
+}
+async function deleteFolderAction(dir, rowEl, render) {
+  if (state.actionBusy) return;
+  state.actionBusy = true;
+  render();
+  try {
+    await deleteFolderAtomic(state.config, dir.path, `chore: elimina cartella "${dir.name}"`);
+    state.dirs = state.dirs.filter(x => x.path !== dir.path);
+    state.searchDirs = state.searchDirs.filter(x => x.path !== dir.path);
+    const prefix = dir.path.endsWith('/') ? dir.path : dir.path + '/';
+    state.files = state.files.filter(x => !x.path.startsWith(prefix));
+    state.searchFiles = state.searchFiles.filter(x => !x.path.startsWith(prefix));
+    state.info = `Cartella "${dir.name}" eliminata.`;
+  } catch (e) {
+    state.actionBusy = false;
+    if (e.status === 404) {
+      await recoverStaleList(render);
+      state.error = staleItemMessage(dir.name);
+    } else {
+      state.error = `Eliminazione cartella non riuscita: ${e.message}`;
     }
     render();
     return;
