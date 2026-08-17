@@ -233,7 +233,7 @@ export async function searchFiles(cfg, rootFolder, query) {
   files.sort((a, b) => a.name.localeCompare(b.name));
   return { dirs, files, truncated: !!truncated };
 }
-async function getRecursiveTree(cfg, treeSha) {
+export async function getRecursiveTree(cfg, treeSha) {
   const res = await fetch(`${apiBase(cfg)}/git/trees/${treeSha}?recursive=1`, {
     headers: ghHeaders(cfg.token),
   });
@@ -255,7 +255,7 @@ export async function fetchTreeRecursive(cfg, folder, { forceRefresh = false } =
   });
   return { entries, truncated: !!truncated };
 }
-async function commitTreeChange(cfg, buildEntries, commitMessage) {
+export async function commitTreeChange(cfg, buildEntries, commitMessage) {
   const key = repoKey(cfg);
   const message = normalizeCommitMessage(commitMessage);
   let lastErr;
