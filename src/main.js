@@ -338,8 +338,8 @@ async function saveFile(htmlContent, showBanner) {
       newSha = renameResult.sha;
     } else if (state.current.sha) {
       const { data } = await putFileRetrying(state.config, newPath, base64, commitMsg, state.current.sha);
-      newSha = data?.content?.sha ?? null;
-      conflictWasResolved = false;
+      newSha = data?.content?.sha ?? state.current.sha ?? null;
+      conflictWasResolved = conflictResolved;
     } else {
       const { data: created } = await putFileRetrying(state.config, newPath, base64, commitMsg, null);
       newSha = created?.content?.sha ?? null;
