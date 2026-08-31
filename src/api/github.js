@@ -33,6 +33,10 @@ export class GhApiError extends Error {
     this.status = status;
   }
 }
+function isShaMissingMessage(msg) {
+  const lower = (msg || '').toLowerCase();
+  return lower.includes('sha') && lower.includes("wasn't supplied");
+}
 function errorMessage(status, body) {
   const msg = body?.message ?? '';
   if (status === 401) return 'Token non valido o scaduto. Controlla il Personal Access Token.';
@@ -40,7 +44,7 @@ function errorMessage(status, body) {
   if (status === 403) return `Accesso negato dal token. Verifica i permessi (Contents: Read and write). Dettaglio: ${msg}`;
   if (status === 409) return `Il file è stato modificato altrove (es. da uno script) dopo che l'hai aperto qui. Dettaglio: ${msg}`;
   if (status === 422 && msg.toLowerCase().includes('not a fast forward')) return 'Il branch è stato aggiornato da un\'altra operazione durante il salvataggio. Riprova tra un momento.';
-  if (status === 422 && msg.toLowerCase().includes("sha wasn't supplied")) return `Il file esiste già su GitHub ma manca il riferimento SHA (sha wasn't supplied). Il file è stato aggiornato automaticamente: riprova il salvataggio.`;
+  if (status === 422 && isShaMissingMessage(msg)) return `Il file esiste già su GitHub ma manca il riferimento SHA (sha wasn't supplied). Il file è stato aggiornato automaticamente: riprova il salvataggio.`;
   return `Errore GitHub (${status}): ${msg}`;
 }
 function throwGhError(status, body) {
@@ -126,7 +130,7 @@ export async function putFileRetrying(cfg, path, base64Content, commitMessage, s
   } catch (e) {
     if (!(e instanceof GhApiError)) throw e;
     const is409 = e.status === 409;
-    const is422ShaMissing = e.status === 422 && e.message.toLowerCase().includes("sha wasn't supplied");
+    const is422ShaMissing = e.status === 422 && isShaMissingMessage(e.message);
     if (!is409 && !is422ShaMissing) throw e;
     const fresh = await fetchFile(cfg, path);
     const data = await putFile(cfg, path, base64Content, commitMessage, fresh.sha);
