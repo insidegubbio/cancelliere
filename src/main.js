@@ -5,7 +5,7 @@ import { loadTheme, applyTheme } from './ui/theme.js';
 import { renderSetup } from './screens/setup.js';
 import { renderList, refreshList, parentFolderOf, categoriesIndexUpsertArticle, categoriesIndexRemoveArticle } from './screens/list.js';
 import { handleGithubCallback } from './api/oauth.js';
-import { fetchFile, putFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
+import { fetchFile, putFileRetrying, renameAndUpdateFileAtomic, bytesToBase64, base64ToBytes, createFolder, getAuthenticatedUser } from './api/github.js';
 import { bodyToHtml, htmlToBody, bodyToPlainText, monumentiToBody } from './json/body.js';
 import { createEmptyDocument } from './json/defaults.js';
 import { Editor, createTiptapExtensions, TOOLBAR_GROUPS, EDITOR_ACTIONS, TOOLBAR_ACTIVE_CHECKS } from './editor/config.js';
@@ -341,7 +341,7 @@ async function saveFile(htmlContent, showBanner) {
       newSha = data?.content?.sha ?? null;
       conflictWasResolved = false;
     } else {
-      const created = await putFile(state.config, newPath, base64, commitMsg, null);
+      const { data: created } = await putFileRetrying(state.config, newPath, base64, commitMsg, null);
       newSha = created?.content?.sha ?? null;
     }
 
