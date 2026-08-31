@@ -337,12 +337,17 @@ async function saveFile(htmlContent, showBanner) {
       const renameResult = await renameAndUpdateFileAtomic(state.config, state.current.file.path, newPath, base64, commitMsg);
       newSha = renameResult.sha;
     } else if (state.current.sha) {
-      const { data } = await putFileRetrying(state.config, newPath, base64, commitMsg, state.current.sha);
-      newSha = data?.content?.sha ?? state.current.sha ?? null;
+      const { data, conflictResolved } = await putFileRetrying(state.config, newPath, base64, commitMsg, state.current.sha);
+      newSha = data?.content?.sha ?? null;
       conflictWasResolved = conflictResolved;
     } else {
       const { data: created } = await putFileRetrying(state.config, newPath, base64, commitMsg, null);
       newSha = created?.content?.sha ?? null;
+    }
+
+    if (!newSha) {
+      const fresh = await fetchFile(state.config, newPath);
+      newSha = fresh.sha;
     }
 
     if (categorySlug && state.categoriesIndex) {
