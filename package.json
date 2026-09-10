@@ -9,13 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tiptap/core": "^3.27.1",
-    "@tiptap/extension-table": "^3.27.1",
-    "@tiptap/extension-table-cell": "^3.27.1",
-    "@tiptap/extension-table-header": "^3.27.1",
-    "@tiptap/extension-table-row": "^3.27.1",
+    "@tiptap/core": "^3.31.3",
+    "@tiptap/extension-table": "^3.31.3",
+    "@tiptap/extension-table-cell": "^3.31.3",
+    "@tiptap/extension-table-header": "^3.31.3",
+    "@tiptap/extension-table-row": "^3.31.3",
     "@tiptap/extension-underline": "^3.27.1",
-    "@tiptap/starter-kit": "^3.27.1"
+    "@tiptap/starter-kit": "^3.31.3"
   },
   "devDependencies": {
     "vite": "^8.2.1"
