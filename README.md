@@ -46,4 +46,4 @@ npm run preview
 
 ## licenza
 
-distribuito con licenza [gpl-3.0](./LICENSE).
+vedi [LICENSE](./LICENSE).
