@@ -1,6 +1,6 @@
 {
   "name": "cancelliere",
-  "version": "2.2.0",
+  "version": "2.2.3",
   "description": "Editor JSON collegato a GitHub",
   "type": "module",
   "scripts": {
